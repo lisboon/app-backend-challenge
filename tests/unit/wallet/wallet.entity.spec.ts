@@ -80,3 +80,64 @@ describe('Wallet.rehydrate', () => {
     expect(wallet.updatedAt).toBe(at);
   });
 });
+
+describe('Wallet: movimentos', () => {
+  const later = new Date('2026-10-24T13:00:00.000Z');
+  const movement = (amount: string) => ({
+    entryId: 'entry-2',
+    transactionId: 'tx-2',
+    money: brl(amount),
+    at: later,
+  });
+
+  it('débito baixa o saldo, sobe a versão e devolve o lançamento correspondente', () => {
+    const { wallet } = open(brl('100.00'));
+    const entry = wallet.debit(movement('80.00'));
+
+    expect(wallet.balance.toString()).toBe('20.00');
+    expect(wallet.version).toBe(2);
+    expect(wallet.updatedAt).toBe(later);
+    expect(entry).toMatchObject({
+      id: 'entry-2',
+      walletId: 'wallet-1',
+      transactionId: 'tx-2',
+      direction: LedgerDirection.Debit,
+      walletVersion: 2,
+      createdAt: later,
+    });
+    expect(entry.balanceBefore.toString()).toBe('100.00');
+    expect(entry.balanceAfter.toString()).toBe('20.00');
+  });
+
+  it('crédito sobe o saldo e a versão', () => {
+    const { wallet } = open(brl('0.00'));
+    const entry = wallet.credit(movement('50.00'));
+
+    expect(wallet.balance.toString()).toBe('50.00');
+    expect(wallet.version).toBe(2);
+    expect(entry.direction).toBe(LedgerDirection.Credit);
+    expect(entry.balanceAfter.toString()).toBe('50.00');
+  });
+
+  it('débito igual ao saldo zera a wallet', () => {
+    const { wallet } = open(brl('80.00'));
+    wallet.debit(movement('80.00'));
+
+    expect(wallet.balance.isZero()).toBe(true);
+  });
+
+  it('débito maior que o saldo é invariante violada e não altera nada', () => {
+    const { wallet } = open(brl('79.99'));
+
+    expect(() => wallet.debit(movement('80.00'))).toThrow(WalletInvariantError);
+    expect(wallet.balance.toString()).toBe('79.99');
+    expect(wallet.version).toBe(1);
+  });
+
+  it('hasFunds aceita valor igual ao saldo e recusa valor maior', () => {
+    const { wallet } = open(brl('80.00'));
+
+    expect(wallet.hasFunds(brl('80.00'))).toBe(true);
+    expect(wallet.hasFunds(brl('80.01'))).toBe(false);
+  });
+});
