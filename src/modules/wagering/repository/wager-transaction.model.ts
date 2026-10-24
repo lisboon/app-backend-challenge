@@ -20,6 +20,8 @@ export const WagerTransactionModel = defineEntity({
     referenceTransactionId: p.uuid().nullable(),
     status: p.string(),
     failureCode: p.string().nullable(),
+    resultBalance: p.decimal('string').precision(20).scale(2).nullable(),
+    resultCurrency: p.string().length(3).nullable(),
     createdAt: p.datetime(),
     processedAt: p.datetime().nullable(),
   },
