@@ -10,12 +10,6 @@ export class WalletAlreadyExistsError extends DomainError {
   }
 }
 
-export class WalletNotFoundError extends DomainError {
-  constructor() {
-    super(FailureCode.WALLET_NOT_FOUND, 'wallet não encontrada');
-  }
-}
-
 export class WalletInvariantError extends Error {
   constructor(reason: string) {
     super(`invariante da wallet violada: ${reason}`);

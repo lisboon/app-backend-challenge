@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { uuid } from '../shared/validation/uuid';
 import { ledgerCursor } from './ledger.cursor';
 
 export const ledgerQuery = z.strictObject({
@@ -11,7 +12,6 @@ export const ledgerQuery = z.strictObject({
     .pipe(z.number().int().min(1).max(100))
     .default(50),
 });
-const uuid = z.uuid().transform((value) => value.toLowerCase());
 
 export const walletIdParam = uuid;
 

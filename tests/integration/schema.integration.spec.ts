@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
+import { Money } from '../../src/modules/@shared/domain/money';
+
 import {
   failureOf,
   ledgerMatchesBalance,
@@ -48,6 +50,8 @@ interface TransactionRow {
   status?: string;
   failureCode?: string | null;
   referenceExternalTransactionId?: string | null;
+  resultBalance?: string | null;
+  resultCurrency?: string | null;
 }
 
 const insertTransaction = (em: EntityManager, tx: TransactionRow) => {
@@ -56,12 +60,19 @@ const insertTransaction = (em: EntityManager, tx: TransactionRow) => {
     tx.providerId ?? (kind === 'OPENING' ? 'internal' : 'provider-a');
   const status = tx.status ?? 'PROCESSED';
   const terminal = ['PROCESSED', 'REJECTED', 'FAILED'].includes(status);
+  const observed = ['PROCESSED', 'REJECTED'].includes(status);
+  const resultBalance =
+    tx.resultBalance === undefined
+      ? observed
+        ? '0.00'
+        : null
+      : tx.resultBalance;
   return em.execute(
     `insert into wager_transactions
        (id, provider_id, external_transaction_id, idempotency_key, payload_hash, wallet_id,
         player_id, currency, round_id, game_id, kind, amount, reference_external_transaction_id,
-        status, failure_code, created_at, processed_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), ${terminal ? 'now()' : 'null'})`,
+        status, failure_code, result_balance, result_currency, created_at, processed_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), ${terminal ? 'now()' : 'null'})`,
     [
       tx.id,
       providerId,
@@ -82,6 +93,12 @@ const insertTransaction = (em: EntityManager, tx: TransactionRow) => {
       tx.referenceExternalTransactionId ?? null,
       status,
       tx.failureCode ?? null,
+      resultBalance,
+      resultBalance === null
+        ? null
+        : tx.resultCurrency === undefined
+          ? 'BRL'
+          : tx.resultCurrency,
     ],
   );
 };
@@ -185,6 +202,7 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(columns).toEqual(
         [
           'wager_transactions.amount',
+          'wager_transactions.result_balance',
           'wallet_ledger_entries.amount',
           'wallet_ledger_entries.balance_after',
           'wallet_ledger_entries.balance_before',
@@ -209,7 +227,8 @@ describe('schema (integração com PostgreSQL real)', () => {
             .execute<{ n: string }[]>(
               `select (select count(*) from pg_tables where schemaname = 'public'
                        and tablename in ('wallets', 'wager_transactions', 'wallet_ledger_entries'))
-                  + (select count(*) from pg_proc where proname like 'wallet%') as n`,
+                  + (select count(*) from pg_proc
+                      where proname like 'wallet%' or proname like 'wager%') as n`,
             )
         )[0].n;
 
@@ -217,7 +236,36 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(Number(await objects())).toBe(0);
 
       await orm.migrator.up();
-      expect(Number(await objects())).toBe(8);
+      expect(Number(await objects())).toBe(10);
+    });
+
+    it('reverter a última migration preserva rejeições gravadas em outra moeda', async () => {
+      const opened = await openWallet('0.00', 'BRL');
+      const rejectedId = uuid();
+      await inTransaction((em) =>
+        insertTransaction(em, {
+          id: rejectedId,
+          walletId: opened.walletId,
+          playerId: opened.playerId,
+          currency: 'USD',
+          amount: '1.00',
+          kind: 'BET',
+          status: 'REJECTED',
+          failureCode: 'CURRENCY_MISMATCH',
+        }),
+      );
+
+      await orm.migrator.down();
+      const [{ n }] = await orm.em
+        .fork()
+        .getConnection()
+        .execute<{ n: string }[]>(
+          'select count(*) as n from wager_transactions where id = ?',
+          [rejectedId],
+        );
+      await orm.migrator.up();
+
+      expect(Number(n)).toBe(1);
     });
   });
 
@@ -523,47 +571,42 @@ describe('schema (integração com PostgreSQL real)', () => {
   });
 
   describe('wager_transactions', () => {
-    it('recusa transação em moeda diferente da wallet', async () => {
-      const opened = await openWallet('0.00', 'BRL');
-      const failure = await failureOf(() =>
-        inTransaction((em) =>
+    it.each([
+      [
+        'em moeda diferente da wallet',
+        { currency: 'USD' },
+        'CURRENCY_MISMATCH',
+      ],
+      ['de outro player', { playerId: uuid() }, 'WALLET_PLAYER_MISMATCH'],
+    ])(
+      'grava para auditoria a rejeição %s',
+      async (_caso, overrides, failureCode) => {
+        const opened = await openWallet('0.00', 'BRL');
+        const id = uuid();
+        await inTransaction((em) =>
           insertTransaction(em, {
-            id: uuid(),
+            id,
             walletId: opened.walletId,
             playerId: opened.playerId,
-            currency: 'USD',
-            amount: '1.00',
-            kind: 'BET',
-          }),
-        ),
-      );
-
-      expect(failure).toMatchObject({
-        code: '23503',
-        constraint: 'wager_tx_wallet_fk',
-      });
-    });
-
-    it('recusa transação de outro player na wallet', async () => {
-      const opened = await openWallet('0.00');
-      const failure = await failureOf(() =>
-        inTransaction((em) =>
-          insertTransaction(em, {
-            id: uuid(),
-            walletId: opened.walletId,
-            playerId: uuid(),
             currency: 'BRL',
             amount: '1.00',
             kind: 'BET',
+            status: 'REJECTED',
+            failureCode,
+            ...overrides,
           }),
-        ),
-      );
+        );
+        const [row] = await orm.em
+          .fork()
+          .getConnection()
+          .execute<{ status: string }[]>(
+            'select status from wager_transactions where id = ?',
+            [id],
+          );
 
-      expect(failure).toMatchObject({
-        code: '23503',
-        constraint: 'wager_tx_wallet_fk',
-      });
-    });
+        expect(row.status).toBe('REJECTED');
+      },
+    );
 
     it.each([
       [
@@ -609,8 +652,28 @@ describe('schema (integração com PostgreSQL real)', () => {
       ],
       [
         'PROCESSED com failure_code',
-        { kind: 'BET', failureCode: 'X' },
+        { kind: 'LOSS', failureCode: 'X' },
         'wager_tx_failure_ck',
+      ],
+      [
+        'PROCESSED sem saldo observado',
+        { kind: 'LOSS', resultBalance: null },
+        'wager_tx_result_balance_ck',
+      ],
+      [
+        'saldo observado sem moeda',
+        { kind: 'LOSS', resultCurrency: null },
+        'wager_tx_result_currency_ck',
+      ],
+      [
+        'saldo observado em transação pendente',
+        { kind: 'BET', status: 'PENDING', resultBalance: '1.00' },
+        'wager_tx_result_balance_ck',
+      ],
+      [
+        'BET de valor zero',
+        { kind: 'BET', amount: '0.00', status: 'REJECTED', failureCode: 'X' },
+        'wager_tx_positive_amount_ck',
       ],
       ['kind desconhecido', { kind: 'BONUS' }, 'wager_tx_kind_ck'],
     ])('recusa %s', async (_caso, overrides, constraint) => {
@@ -631,6 +694,21 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(failure).toMatchObject({ code: '23514', constraint });
     });
 
+    it('aceita LOSS processada de valor zero e sem lançamento', async () => {
+      const opened = await openWallet('0.00');
+
+      await inTransaction((em) =>
+        insertTransaction(em, {
+          id: uuid(),
+          walletId: opened.walletId,
+          playerId: opened.playerId,
+          currency: 'BRL',
+          amount: '0.00',
+          kind: 'LOSS',
+        }),
+      );
+    });
+
     it('idempotency key é única por provedor, não globalmente', async () => {
       const opened = await openWallet('0.00');
       const base = {
@@ -638,7 +716,7 @@ describe('schema (integração com PostgreSQL real)', () => {
         playerId: opened.playerId,
         currency: 'BRL',
         amount: '1.00',
-        kind: 'BET',
+        kind: 'LOSS',
         idempotencyKey: 'shared-key',
       };
       await inTransaction(async (em) => {
@@ -667,6 +745,114 @@ describe('schema (integração com PostgreSQL real)', () => {
         code: '23505',
         constraint: 'wager_tx_idempotency_uk',
       });
+    });
+  });
+
+  describe('transação e lançamento andam juntos', () => {
+    interface Movement {
+      kind?: string;
+      status?: string;
+      failureCode?: string | null;
+      currency?: string;
+      playerId?: string;
+      direction?: string;
+      amount?: string;
+      entryAmount?: string;
+      withEntry?: boolean;
+    }
+
+    const move = async (movement: Movement = {}): Promise<OpenedWallet> => {
+      const opened = await openWallet('100.00');
+      const kind = movement.kind ?? 'BET';
+      const direction = movement.direction ?? 'DEBIT';
+      const amount = movement.amount ?? '10.00';
+      const entry = Money.from({
+        amount: movement.entryAmount ?? amount,
+        currency: 'BRL',
+      });
+      const before = Money.from({ amount: '100.00', currency: 'BRL' });
+      const afterText = (
+        direction === 'DEBIT' ? before.subtract(entry) : before.add(entry)
+      ).toString();
+      await inTransaction(async (em) => {
+        const transactionId = uuid();
+        await insertTransaction(em, {
+          id: transactionId,
+          walletId: opened.walletId,
+          playerId: movement.playerId ?? opened.playerId,
+          currency: movement.currency ?? 'BRL',
+          amount,
+          kind,
+          status: movement.status,
+          failureCode: movement.failureCode,
+          resultBalance: afterText,
+        });
+        if (movement.withEntry ?? true) {
+          await insertEntry(em, {
+            walletId: opened.walletId,
+            transactionId,
+            direction,
+            amount: entry.toString(),
+            before: '100.00',
+            after: afterText,
+            version: 2,
+          });
+          await em.execute(
+            'update wallets set balance = ?, version = 2 where id = ?',
+            [afterText, opened.walletId],
+          );
+        }
+      });
+      return opened;
+    };
+
+    it('aceita BET processada com o débito correspondente', async () => {
+      const opened = await move();
+
+      expect(await ledgerMatchesBalance(orm, opened.walletId)).toEqual({
+        stored: '90.00',
+        rebuilt: '90.00',
+      });
+    });
+
+    it.each([
+      [
+        'BET processada sem lançamento',
+        { withEntry: false },
+        'aplicada sem lançamento',
+      ],
+      [
+        'lançamento de transação rejeitada',
+        { status: 'REJECTED', failureCode: 'INSUFFICIENT_BALANCE' },
+        'exige transação PROCESSED',
+      ],
+      ['lançamento de LOSS', { kind: 'LOSS' }, 'exige transação PROCESSED'],
+      [
+        'lançamento com valor diferente do da transação',
+        { entryAmount: '9.99' },
+        'diverge do valor, da moeda ou do player',
+      ],
+      [
+        'lançamento de transação em outra moeda',
+        { currency: 'USD' },
+        'diverge do valor, da moeda ou do player',
+      ],
+      [
+        'lançamento de transação de outro player',
+        { playerId: uuid() },
+        'diverge do valor, da moeda ou do player',
+      ],
+      ['crédito para uma BET', { direction: 'CREDIT' }, 'direção incompatível'],
+      [
+        'débito para um WIN',
+        { kind: 'WIN', direction: 'DEBIT' },
+        'direção incompatível',
+      ],
+    ])('recusa no commit %s', async (_caso, movement, message) => {
+      const failure = await failureOf(() => move(movement));
+
+      expect(failure.code).toBe('23514');
+      expect(failure.message).toContain(message);
     });
   });
 });

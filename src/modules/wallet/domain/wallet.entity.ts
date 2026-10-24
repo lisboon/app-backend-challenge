@@ -23,6 +23,13 @@ export interface OpenWalletProps {
   at: Date;
 }
 
+export interface WalletMovementProps {
+  entryId: string;
+  transactionId: string;
+  money: Money;
+  at: Date;
+}
+
 export interface OpenedWallet {
   wallet: Wallet;
   openingEntry: WalletLedgerEntry | undefined;
@@ -92,5 +99,46 @@ export class Wallet {
 
   get updatedAt(): Date {
     return this._updatedAt;
+  }
+
+  hasFunds(money: Money): boolean {
+    return !this._balance.isLessThan(money);
+  }
+
+  debit(movement: WalletMovementProps): WalletLedgerEntry {
+    if (!this.hasFunds(movement.money)) {
+      throw new WalletInvariantError('débito maior que o saldo');
+    }
+    return this.move(LedgerDirection.Debit, movement);
+  }
+
+  credit(movement: WalletMovementProps): WalletLedgerEntry {
+    return this.move(LedgerDirection.Credit, movement);
+  }
+
+  private move(
+    direction: LedgerDirection,
+    movement: WalletMovementProps,
+  ): WalletLedgerEntry {
+    const balanceBefore = this._balance;
+    const balanceAfter =
+      direction === LedgerDirection.Debit
+        ? balanceBefore.subtract(movement.money)
+        : balanceBefore.add(movement.money);
+    const entry = WalletLedgerEntry.create({
+      id: movement.entryId,
+      walletId: this.id,
+      transactionId: movement.transactionId,
+      direction,
+      money: movement.money,
+      balanceBefore,
+      balanceAfter,
+      walletVersion: this._version + 1,
+      createdAt: movement.at,
+    });
+    this._balance = balanceAfter;
+    this._version += 1;
+    this._updatedAt = movement.at;
+    return entry;
   }
 }
