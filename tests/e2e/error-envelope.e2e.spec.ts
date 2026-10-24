@@ -57,8 +57,10 @@ describe('envelope de erro HTTP (e2e)', () => {
 
   it.each([
     ['payload inválido', FailureCode.MONEY_INVALID_FORMAT, 400],
+    ['conflito', FailureCode.WALLET_ALREADY_EXISTS, 409],
     ['recurso inexistente', FailureCode.RESOURCE_NOT_FOUND, 404],
     ['rejeição de negócio', FailureCode.CURRENCY_MISMATCH, 422],
+    ['falha transitória', FailureCode.INFRASTRUCTURE_UNAVAILABLE, 503],
     ['defeito interno', FailureCode.INTERNAL_ERROR, 500],
   ])('%s (%s) responde %d', async (_caso, code, status) => {
     const response = await fetch(`${baseUrl}/probe/domain/${code}`);
@@ -69,6 +71,18 @@ describe('envelope de erro HTTP (e2e)', () => {
       failureCode: code,
       message: 'probe',
     });
+  });
+
+  it('só a falha transitória informa Retry-After', async () => {
+    const transient = await fetch(
+      `${baseUrl}/probe/domain/${FailureCode.INFRASTRUCTURE_UNAVAILABLE}`,
+    );
+    const conflict = await fetch(
+      `${baseUrl}/probe/domain/${FailureCode.WALLET_ALREADY_EXISTS}`,
+    );
+
+    expect(transient.headers.get('retry-after')).toBe('1');
+    expect(conflict.headers.get('retry-after')).toBeNull();
   });
 
   it('exceção HTTP do framework sai no mesmo envelope', async () => {
