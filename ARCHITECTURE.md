@@ -210,8 +210,8 @@ obrigaria extensão `.js` em todo import relativo. O custo é não poder usar
 
 ### Readiness
 
-`/health/ready` faz `select 1` no PostgreSQL e `GetQueueUrl` na fila de
-comandos, em paralelo e com 2 s de timeout cada.
+`/health/ready` faz `select 1` no PostgreSQL e `GetQueueUrl` nas filas de
+comandos e de eventos, em paralelo e com 2 s de timeout por dependência.
 
 - **A app sobe com dependência fora** e reconecta sozinha quando ela volta. O
   enunciado assume PostgreSQL e SQS temporariamente indisponíveis, e um
@@ -255,6 +255,11 @@ cada um tem um teste que o viola por SQL cru
 | idempotência por provedor | `UNIQUE (provider_id, idempotency_key)` e `UNIQUE (provider_id, external_transaction_id)` |
 | `OPENING` é interno | `CHECK ((provider_id = 'internal') = (kind = 'OPENING'))` |
 | toda alteração de saldo tem lançamento, e vice-versa | trigger diferido no `COMMIT`: o saldo e a versão da wallet batem com o último lançamento, e cada lançamento continua o saldo do anterior |
+| eventId único na outbox | `outbox_messages_pk` |
+| ordem persistida por wallet | `sequence bigint generated always as identity`, com `outbox_sequence_uk`; atribuída com o lock da wallet retido |
+| evento persistido imutável | trigger `outbox_event_immutable`: recusa alteração de id, agregado, tipo, payload, ocorrência e sequence, e recusa `DELETE` |
+| outbox não pode ser truncada | trigger de statement `outbox_event_no_truncate` |
+| tentativas não negativas e publicação posterior à ocorrência | `outbox_attempts_ck` e `outbox_published_at_ck` |
 
 **Interpretações adotadas:**
 
@@ -268,8 +273,9 @@ cada um tem um teste que o viola por SQL cru
 - **Qualquer código ISO-4217 é aceito.** O modelo é multimoeda e cada moeda tem
   a sua wallet.
 
-**Limitação:** a abertura ainda não publica `WalletBalanceChanged`. O evento
-entra junto com a outbox, na mesma transação da abertura.
+A abertura com saldo positivo grava `WagerTransactionProcessed` de `OPENING` e
+`WalletBalanceChanged` na outbox, na mesma transação da abertura. Saldo zero
+não gera eventos. A publicação depois do commit está descrita na seção 9.
 
 ## 6. Transações e erros de banco
 
@@ -338,8 +344,8 @@ O módulo global de observabilidade fornece um `Registry` próprio do
 `wallet_reconciliation_divergences_total`; não há registro global padrão nem
 métricas automáticas. `GET /metrics` usa o content type desse registro.
 O contador é local ao processo e reinicia com ele; o Prometheus agrega as
-instâncias. As demais métricas da seção 12 entram com os futuros incrementos
-de processamento de apostas, retries, inbox e outbox.
+instâncias. As métricas da outbox estão na seção 9. As demais métricas da seção
+12 acompanham os próximos incrementos de consumo, referências pendentes e inbox.
 
 ## 8. Submissão de transações de aposta
 
@@ -355,7 +361,8 @@ de processamento de apostas, retries, inbox e outbox.
    saldo suficiente;
 4. aplica o movimento pelo agregado `Wallet` (`debit` ou `credit`), grava a
    wallet condicionada à versão lida e o lançamento; `LOSS` não move saldo;
-5. grava a transação já com o desfecho e o saldo observado.
+5. grava a transação com o desfecho, o saldo observado e o evento na outbox.
+   Quando há movimento, o adaptador da wallet também grava seu evento.
 
 O lock da wallet é o ponto de serialização: reenvios da mesma chave para a
 mesma wallet esperam o primeiro terminar e encontram a transação gravada.
@@ -407,6 +414,143 @@ saldo atual, porque responde ao pedido original.
   255, com espaços nas pontas removidos. As colunas são `text`; o limite
   protege índices e logs, e quem passa dele recebe `400`.
 
-**Limitações:** `REFUND`, `ROLLBACK`, o consumo pela fila e a publicação de
-`WagerTransactionProcessed`, `WagerTransactionRejected` e
-`WalletBalanceChanged` pela outbox entram nos próximos incrementos.
+**Limitações:** `REFUND`, `ROLLBACK`, referências pendentes, consumo pela fila
+e inbox entram nos próximos incrementos.
+
+## 9. Outbox
+
+O envelope é uma classe abstrata `IntegrationEvent<T>`. Cada evento define seu
+tipo e versão: `WagerTransactionProcessed`, `WagerTransactionRejected` e
+`WalletBalanceChanged`, todos na versão 1. Os dados contêm `MoneyProps`, com
+valores em string; a ocorrência é serializada em ISO-8601. Abertura, `BET`,
+`WIN` e `LOSS` aplicados geram o evento processado. Rejeição gera somente o
+evento rejeitado. Só alterações de saldo geram `WalletBalanceChanged`.
+
+O input dos casos de uso recebe `correlationId`. A borda HTTP preserva um UUID
+válido de `X-Correlation-Id`, normalizado para minúsculas; na ausência ou
+invalidade, gera UUIDv7. Uma função única guarda o id resolvido em uma propriedade
+do request, preservando o header bruto. Interceptor e filtro de erros usam a
+mesma função; os controllers recebem `@CorrelationId()`. A resposta devolve o
+header também para JSON malformado e rota inexistente, que falham antes do
+interceptor. O replay pode ter outro header, mas não grava eventos novos nem
+altera a correlação do evento original. `WalletBalanceChanged.causationId`
+aponta para o `eventId` de `WagerTransactionProcessed` da mesma transação.
+Os outros eventos não têm causationId. IDs vêm do `IdGenerator`, e o `Clock`
+fornece o instante do desfecho. No submit, esse instante é lido depois do lock
+da wallet, para que a espera pelo lock não antecipe a ocorrência do evento.
+
+O caso de uso de submit grava primeiro o evento da transação. O adaptador de
+movimento devolve o saldo e uma operação para registrar seu evento, chamada
+após o registro do processado. Assim, `WagerTransactionProcessed` precede
+`WalletBalanceChanged` na sequência, sem transferir a montagem do evento de
+saldo para o contexto de apostas. A porta de abertura liga os dois contextos
+sem fazer o caso de uso da wallet importar o domínio de apostas. Todas essas
+gravações recebem o mesmo contexto do `TransactionManager`: falhar antes ou
+depois da inserção da outbox desfaz também transação, wallet e ledger. A
+migration cria a outbox vazia; não reconstrói eventos de operações anteriores.
+
+`OutboxMessage` mantém tentativas, próxima tentativa e publicação. Seu payload
+é o envelope serializado e não muda nos retries. O schema recusa alterações
+dos campos do evento e remoção por `DELETE` ou `TRUNCATE`. Só os metadados de publicação
+podem mudar. Há índice parcial de vencimento para pendentes e outro por
+agregado e sequence para encontrar o antecessor. Uma migration reversível
+adiciona a sequência e as proteções à tabela, inclusive para ambientes de
+revisão que já aplicaram a migration de criação. As constraints e os
+triggers têm testes por SQL cru; os nomes das constraints `NOT NULL` do
+PostgreSQL 18 são conferidos no catálogo, pois o diagnóstico `23502` informa
+a coluna, mas não envia o nome da constraint.
+
+O enunciado não fixa o destino dos eventos. Escolhemos a fila
+`wallet-events.fifo`, reaproveitando a infraestrutura SQS e permitindo várias
+instâncias consumidoras idempotentes. `EVENTS_QUEUE_NAME` configura seu nome, validado como
+FIFO; o hook do LocalStack cria a fila sem deduplicação por conteúdo. O corpo
+é o envelope persistido, `MessageGroupId` é o walletId e
+`MessageDeduplicationId` é o eventId.
+
+O publicador roda em processo separado, sem a API HTTP, criado por
+`NestFactory.createApplicationContext`. Cada ciclo seleciona até 100 eventos
+devidos, em ordem de `sequence`, com `FOR UPDATE SKIP LOCKED`, publica
+no SQS, atualiza os metadados e confirma a transação. A sequência é atribuída
+no INSERT, com o lock financeiro retido, e preserva a ordem por wallet entre
+processos. UUIDv7 e occurredAt não são usados para desempatar ou encontrar
+antecessores. Publishers não esperam as linhas já capturadas por
+outro e wallets distintas avançam em paralelo, sem lock global.
+
+**A ordem por wallet exige mais que SKIP LOCKED.** A consulta identifica o
+primeiro pendente de cada agregado e o primeiro retry futuro. Trava somente
+cabeças devidas com SKIP LOCKED; uma cabeça travada por outro publisher exclui
+a wallet inteira. Para as wallets capturadas, seleciona o prefixo contíguo de
+devidos, até o primeiro retry futuro e o limite global do lote. O recheck da
+cabeça considera o estado atual da linha para não aproveitar um snapshot
+anterior a uma publicação concorrente.
+
+Dentro da wallet, os envios são seriais. Se um envio falhar, somente esse evento
+agenda retry: os seguintes não são tentados e não incrementam attempts.
+O paralelismo de dez passa a ser entre wallets. Um erro não impede as outras
+wallets do lote. Todos os resultados em andamento são aguardados antes de
+propagar um erro de banco e liberar os locks. Uma wallet pode drenar vários
+eventos em um ciclo; o teste com cinquenta BETs, duas APIs e dois publishers
+publica os 102 eventos, incluindo a abertura, em até três ciclos.
+
+O SQL exclui publicados e o domínio também confere `isDue` antes do envio.
+As duas camadas têm testes independentes, pois uma protege consultas e a
+outra protege o caso de uso mesmo diante de um gateway que devolva mensagens
+publicadas ou ainda não devidas.
+
+Testes diretos do repositório também verificam o corte do prefixo no primeiro
+retry futuro e o recheck da cabeça publicada depois do snapshot. No segundo,
+uma view temporária preserva os valores da tabela e intercala um lock
+consultivo na leitura da sequência. O teste espera esse lock no PostgreSQL,
+confirma a publicação em outra transação e libera a consulta original.
+A wallet não pode entrar nesse lote; seu próximo pendente fica disponível
+na consulta seguinte. As remoções isoladas das duas cláusulas SQL fazem
+esses testes falharem, sem depender de `isDue` ou do `break` do caso de uso.
+
+Usamos `SendMessage` individual para associar cada confirmação ou falha à sua
+linha. A URL da fila é resolvida uma vez por instância do adaptador, compartilhando
+a mesma Promise entre chamadas concorrentes. Falhas na consulta ou erro de fila
+inexistente invalidam o cache. Os retries do SDK são desativados: o retry pertence à outbox, que grava
+`attempts`, `next_attempt_at` e apenas o código ou a classe em `last_error`.
+O backoff é `1s × 2^(attempts-1)`, sem jitter, com teto de cinco minutos.
+**Não há limite de tentativas nem descarte para DLQ:** um evento confirmado
+nunca é abandonado. O atraso deve ser acompanhado pelo lag e resolvido pela
+operação. O intervalo entre ciclos vem de `OUTBOX_POLL_INTERVAL_MS`, padrão
+500 ms, inteiro positivo dentro da faixa suportada pelo timer do runtime.
+
+O envio ocorre depois do commit financeiro, mas antes do commit do lote da
+outbox. Se o processo morrer, o PostgreSQL aborta o lote e libera os locks.
+Outra instância assume os pendentes. Se o SQS recebeu e o commit falhou, haverá
+novo envio do mesmo eventId. Essa entrega é **at-least-once**: o FIFO deduplica
+por cinco minutos, mas isso não substitui a deduplicação persistente por
+eventId no consumidor, que será implementado com a inbox.
+
+O worker usa o Registry próprio já existente. Expõe `outbox_lag_seconds`
+(idade do pendente mais antigo, inclusive em retry, zero quando vazio),
+`outbox_published_total`, `outbox_publish_failures_total` e
+`outbox_publish_retries_total`, com label `event_type`. O último incrementa a
+cada `scheduleRetry`, distinguindo retentativas agendadas de falhas de envio.
+O contador de publicação acompanha confirmações de envio,
+incluindo reenvios após falha de commit; não representa eventos únicos.
+Métricas são locais ao processo e reiniciam com ele. A API também registra
+essas famílias, mas os valores de publicação devem ser coletados no worker.
+
+Um servidor `Bun.serve` expõe somente `/metrics` em `WORKER_METRICS_PORT`,
+padrão 3001, sem subir uma segunda aplicação HTTP Nest. O servidor compartilha
+o ciclo de vida do contexto. Logs JSON do worker carregam os identificadores
+disponíveis e código ou classe da falha, sem corpo do evento, saldo, valor
+recebido ou URL de conexão. `providerId` é null no evento de saldo, cujo
+contrato não contém esse campo.
+
+Em SIGTERM, um handler fecha o contexto Nest, espera o lote em andamento e
+encerra com zero. O scheduler para antes de destruir o cliente SQS e o pool
+do banco. O tratamento explícito evita o reenvio do sinal pelo Nest, que fora
+de container produziria 143; SIGINT usa `enableShutdownHooks`. O Compose
+reserva dois minutos para encerramento. Uma interrupção forçada mantém a
+recuperação pela outbox. Os testes de processo cobrem SIGKILL no lote e
+SIGTERM sem iniciar outro; o teste de SIGTERM é pulado no Windows.
+
+**Limitação operacional:** reverta a `Migration20261024000004OutboxOrdering`
+somente com a outbox drenada: o `down` derruba a coluna `sequence`, e o `up`
+a recria como identity, reatribuindo os valores sem preservar explicitamente
+a ordem anterior. Com eventos pendentes, a ordem de publicação pode passar
+a depender da ordem física das linhas.

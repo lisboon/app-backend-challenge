@@ -3,8 +3,8 @@
 Solução do desafio técnico da Jungle Gaming. O enunciado está em
 [`CHALLENGE.md`](CHALLENGE.md) e as decisões em [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-> Em construção. Este README lista só o que já existe. As transações de aposta
-> e o consumidor SQS entram nos próximos incrementos.
+> Em construção. Este README lista só o que já existe. REFUND, ROLLBACK e o
+> consumidor SQS com inbox entram nos próximos incrementos.
 
 ## Pré-requisitos
 
@@ -14,22 +14,24 @@ Solução do desafio técnico da Jungle Gaming. O enunciado está em
 ## Subir tudo
 
 ```bash
-docker compose up -d --wait
+docker compose up -d --wait --build
 curl http://127.0.0.1:3000/health/ready
 ```
 
-O `--wait` só retorna quando PostgreSQL, SQS e a API estão saudáveis. Antes da
-API subir, o serviço `migrate` aplica as migrations e termina. As filas
-`wager-transactions.fifo` e `wager-transactions-dlq.fifo` são criadas pelo
-LocalStack na subida. Nenhum passo é manual.
+O `--wait` só retorna quando PostgreSQL, SQS, API e worker estão saudáveis.
+Antes dos processos subirem, `migrate` aplica as migrations e termina. O
+LocalStack cria `wager-transactions.fifo`, `wager-transactions-dlq.fifo` e
+`wallet-events.fifo`. O worker publica os eventos confirmados da outbox na
+fila de eventos. Nenhum passo é manual.
 
 | Serviço | Endereço local |
 |---|---|
 | API | `http://127.0.0.1:3000` |
+| Métricas do worker | `http://127.0.0.1:3001/metrics` |
 | PostgreSQL | `127.0.0.1:5432` (usuário, senha e banco `wager`) |
 | SQS (LocalStack) | `http://127.0.0.1:4566` |
 
-As portas mudam com `API_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
+As portas mudam com `API_PORT`, `WORKER_METRICS_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
 
 ## Endpoints
 
@@ -42,9 +44,9 @@ As portas mudam com `API_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
 | `POST /wagering/transactions` | Header `Idempotency-Key` obrigatório; `201` aplicada, `422` rejeitada com `failureCode`; reenvio repete o resultado com `idempotentReplay: true`; `409` para chave ou `externalTransactionId` com outro payload; `404` para wallet inexistente; `503` se o lock não sai em 2 s |
 | `GET /wagering/transactions/:transactionId` | `200` com a transação e o saldo observado, `404` ou `400` |
 | `GET /providers/:providerId/wagering/transactions/:externalTransactionId` | `200` ou `404` |
-| `GET /metrics` | Texto Prometheus com `wallet_reconciliation_divergences_total` |
+| `GET /metrics` | Texto Prometheus com métricas de reconciliação e famílias da outbox; colete a publicação no processo worker |
 | `GET /health/live` | `200` enquanto o processo está de pé |
-| `GET /health/ready` | `200` com PostgreSQL e SQS alcançáveis; `503` dizendo qual caiu |
+| `GET /health/ready` | `200` com PostgreSQL e ambas as filas SQS alcançáveis; `503` dizendo qual dependência caiu |
 
 O extrato retorna lançamentos do mais recente ao mais antigo. Reenvie o
 `nextCursor` na próxima consulta; `null` indica o fim. Wallet zero sem
@@ -54,6 +56,10 @@ saldo. A diferença é o saldo armazenado menos o calculado.
 
 Com o PostgreSQL indisponível, os endpoints de wallet respondem `503` com
 `Retry-After`. Todo erro sai no envelope `{ statusCode, failureCode, message }`.
+
+`X-Correlation-Id` pode ser enviado como UUID. A API devolve o valor normalizado
+ou gera um UUIDv7 quando o header falta ou é inválido. O valor acompanha os
+eventos financeiros. Replays mantêm a outbox original, sem novos eventos.
 
 ```bash
 curl -X POST http://127.0.0.1:3000/wallets \
@@ -73,6 +79,37 @@ bun run dev
 
 `migrate:down` reverte a última migration e `migrate:status` lista as aplicadas
 e as pendentes.
+
+Em outro terminal, com o mesmo `.env`, inicie o publicador:
+
+```bash
+bun run start:worker
+curl http://127.0.0.1:3001/metrics
+```
+
+| Variável | Padrão / uso |
+|---|---|
+| `EVENTS_QUEUE_NAME` | Obrigatória; `.env.example` usa `wallet-events.fifo`. Deve ser um nome FIFO; configura também o hook do LocalStack |
+| `OUTBOX_POLL_INTERVAL_MS` | `500`; inteiro de 1 a 2147483647, intervalo entre ciclos do publicador |
+| `WORKER_METRICS_PORT` | `3001`; porta das métricas, independente da API |
+
+O worker tem `outbox_lag_seconds`, `outbox_published_total`,
+`outbox_publish_failures_total` e `outbox_publish_retries_total`. Os contadores
+têm label `event_type`. Publica prefixos de eventos por wallet, em ordem de
+sequence, com até dez wallets em paralelo. Uma falha interrompe apenas aquela
+wallet, sem tentar seus eventos seguintes. Eventos
+com falha recebem backoff exponencial de 1 s até 5 min e continuam pendentes,
+sem limite de tentativas. SIGTERM conclui o lote em andamento antes de sair.
+
+Para inspecionar eventos publicados no ambiente local:
+
+```bash
+docker compose exec sqs sh -c 'queue_url=$(awslocal sqs get-queue-url --queue-name "$EVENTS_QUEUE_NAME" --query QueueUrl --output text); awslocal sqs receive-message --queue-url "$queue_url" --max-number-of-messages 10 --wait-time-seconds 2 --message-system-attribute-names All'
+```
+
+O corpo contém o envelope versionado, com eventId e correlationId; o grupo é a
+wallet. A entrega é at-least-once. Consumidores devem deduplicar por eventId,
+inclusive depois da janela de cinco minutos de deduplicação do SQS FIFO.
 
 ## Testes
 
