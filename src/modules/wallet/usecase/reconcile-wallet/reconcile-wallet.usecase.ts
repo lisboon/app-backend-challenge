@@ -1,5 +1,5 @@
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
-import { WalletNotFoundError } from '../../domain/errors/wallet.errors';
+import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
 import { WalletReconciliation } from '../../domain/wallet-reconciliation';
 import type { WalletGateway } from '../../gateway/wallet.gateway';
 import type { LedgerGateway } from '../../gateway/ledger.gateway';
