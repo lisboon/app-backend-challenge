@@ -4,6 +4,7 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { FailureCode } from '../../src/modules/@shared/domain/failure-code';
+import { OpeningTransactionRepository } from '../../src/modules/wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
 import type { LedgerGateway } from '../../src/modules/wallet/gateway/ledger.gateway';
 import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
@@ -367,7 +368,7 @@ describe('wallets (integração HTTP com PostgreSQL real)', () => {
         new MikroOrmTransactionManager(orm),
         new WalletRepository(),
         failingLedger,
-        new WagerTransactionRepository(),
+        new OpeningTransactionRepository(new WagerTransactionRepository()),
         { next: uuid },
         { now: () => new Date() },
       );
