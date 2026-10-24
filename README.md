@@ -37,8 +37,17 @@ As portas mudam com `API_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
 |---|---|
 | `POST /wallets` | `201` com a wallet; `409` se o player já tem wallet nessa moeda; `400` se o payload é inválido |
 | `GET /wallets/:walletId` | `200`, `404` ou `400` se o id não é UUID |
+| `GET /wallets/:walletId/ledger?cursor=...&limit=50` | `200` com `items` e `nextCursor`; limite de 1 a 100; `400` para query inválida e `404` para wallet inexistente |
+| `POST /wallets/:walletId/reconciliation` | Sem corpo; `200` com saldos armazenado/calculado, diferença, consistência e quantidade de entradas; `400` para id inválido e `404` para wallet inexistente |
+| `GET /metrics` | Texto Prometheus com `wallet_reconciliation_divergences_total` |
 | `GET /health/live` | `200` enquanto o processo está de pé |
 | `GET /health/ready` | `200` com PostgreSQL e SQS alcançáveis; `503` dizendo qual caiu |
+
+O extrato retorna lançamentos do mais recente ao mais antigo. Reenvie o
+`nextCursor` na próxima consulta; `null` indica o fim. Wallet zero sem
+movimentações retorna `items: []`. A reconciliação compara saldo e ledger no
+mesmo snapshot, registra divergências e incrementa o contador, sem alterar o
+saldo. A diferença é o saldo armazenado menos o calculado.
 
 Com o PostgreSQL indisponível, os endpoints de wallet respondem `503` com
 `Retry-After`. Todo erro sai no envelope `{ statusCode, failureCode, message }`.

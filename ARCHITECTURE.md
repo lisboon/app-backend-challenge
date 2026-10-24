@@ -44,8 +44,8 @@ subir o Nest, e trocam um gateway por um que falha para provar atomicidade.
 **Nomes.** Arquivos, casos de uso e gateways seguem o padrão `create`/`findById`
 dos projetos anteriores. Dentro do agregado ficam os verbos do domínio pedidos
 no enunciado: `Wallet.open`, `WalletLedgerEntry.create` e `rehydrate`. O
-`LedgerGateway` só tem `create`, e a ausência de `update` expressa no contrato
-que o ledger não muda.
+`LedgerGateway` permite criar e consultar lançamentos; a ausência de `update`
+e `delete` expressa no contrato que o ledger não muda.
 
 ## 2. Money
 
@@ -271,7 +271,7 @@ entra junto com a outbox, na mesma transação da abertura.
 
 Todo acesso ao banco passa pelo `TransactionManager`, inclusive as leituras.
 O adaptador abre um `EntityManager` isolado (`em.fork()`) por chamada e executa
-o trabalho em `READ COMMITTED`. Os gateways recebem o contexto da transação como
+o trabalho de `execute` em `READ COMMITTED`. Os gateways recebem o contexto da transação como
 parâmetro obrigatório, então nenhuma escrita acontece fora de uma transação.
 
 **A tradução de erro do driver é feita pelo código, não pela classe.** Pela API
@@ -289,3 +289,48 @@ aparece nos dois casos:
 player e moeda resultam em um 201 e dezenove 409. O índice único serializa as
 inserções, e a tradução do `23505` faz o conflito chegar como resposta de
 contrato, não como 500.
+
+## 7. Extrato e reconciliação
+
+O extrato usa paginação por chave sobre `wallet_version`, em ordem decrescente,
+apoiada pelo índice único `(wallet_id, wallet_version)`. A próxima página busca
+versões estritamente menores que a última devolvida. Consultar `limit + 1`
+permite informar o fim sem contar todos os lançamentos. Novos lançamentos não
+deslocam as páginas já percorridas, como aconteceria com `OFFSET`.
+
+O cursor pertence ao transporte HTTP: base64url de
+`{"v":1,"walletVersion":<n>}`. O caso de uso recebe apenas a versão. A leitura
+valida o alfabeto base64url, o JSON, os campos permitidos, a versão do formato
+e a faixa de inteiros positivos do PostgreSQL para a versão da wallet. Falhas
+entram na validação do zod e saem pelo `parseRequest`, como as demais entradas.
+O cursor é opaco, mas não tem assinatura: uma versão válida reencodificada é
+uma posição de consulta válida. O contrato não prevê autenticação do cursor.
+A query é estrita, com limite padrão 50 e faixa de 1 a 100.
+
+A reconciliação usa `TransactionManager.snapshot`: uma transação
+`REPEATABLE READ` com `readOnly: true`. Saldo e soma enxergam o mesmo snapshot,
+mesmo que um débito concorrente seja confirmado entre as leituras. A opção
+somente leitura também impede uma correção acidental. O adaptador compartilha
+com `execute` a tradução de erros de conexão.
+
+O caso de uso carrega a wallet e passa sua moeda ao gateway do extrato, sem
+nova consulta à wallet no repositório. Créditos e débitos são somados
+separadamente no SQL em `NUMERIC`, convertidos para `numeric(20,2)::text` e
+reconstruídos como `Money`. O saldo calculado nasce de `créditos.subtract(débitos)`,
+sem conversão monetária para `number` nem manipulação de sinal em strings.
+O relatório calcula armazenado menos calculado, incluindo diferenças negativas.
+Wallet zero sem entradas soma zero.
+
+Divergências são relatadas, nunca corrigidas: a reconciliação é uma auditoria,
+e mudar saldo ocultaria a inconsistência sem produzir uma movimentação
+financeira válida. Após concluir o snapshot, somente divergências acionam o
+monitor, com aviso estruturado contendo walletId, diferença e quantidade de
+entradas, sem saldo completo nem payload recebido.
+
+O módulo global de observabilidade fornece um `Registry` próprio do
+`prom-client` 15.1.3. Cada aplicação possui seu contador
+`wallet_reconciliation_divergences_total`; não há registro global padrão nem
+métricas automáticas. `GET /metrics` usa o content type desse registro.
+O contador é local ao processo e reinicia com ele; o Prometheus agrega as
+instâncias. As demais métricas da seção 12 entram com os futuros incrementos
+de processamento de apostas, retries, inbox e outbox.
