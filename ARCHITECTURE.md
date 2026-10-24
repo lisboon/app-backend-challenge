@@ -98,3 +98,102 @@ erro tem o mesmo envelope `{ statusCode, failureCode, message }`:
 - **Tentar mudar transação terminal não tem `failureCode`.** O enunciado diz que
   isso é erro de programação, não caminho de negócio. Por isso vira 500
   (`INTERNAL_ERROR`), não 409.
+
+## 4. Infraestrutura local
+
+Todas as imagens são fixadas por digest de índice multi-arquitetura (amd64 e
+arm64), para o `docker compose up` ser reprodutível também em Mac com Apple
+Silicon.
+
+### SQS: LocalStack 4.12
+
+O enunciado aceita LocalStack ou MiniStack. Os dois foram comparados com o
+mesmo SDK e os 17 comportamentos de SQS que a solução usa. Esses comportamentos
+estão em `tests/integration/sqs-contract.integration.spec.ts`.
+
+| | LocalStack 4.12 | MiniStack 1.5.22 |
+|---|---|---|
+| Contrato SQS | 17/17 | 16/17 |
+| Download comprimido | 475 MB | 74 MB |
+| RAM parado | ~90 MB | ~38 MB |
+
+- **Escolhido pela fidelidade.** No MiniStack, reenviar com o mesmo
+  `MessageDeduplicationId` e corpo diferente faz o SDK lançar
+  `InvalidChecksumError`: o MD5 devolvido não confere com o corpo enviado.
+  Contornar isso exigiria desligar a validação de integridade do SDK.
+- **Versão 4.12, não `latest`.** Desde março de 2026 a imagem `latest` exige
+  `LOCALSTACK_AUTH_TOKEN` e sai com código 55 sem ele. A 4.12, de dezembro de
+  2025, sobe sem token (testado). Com token, o avaliador precisaria criar conta e
+  a ativação dependeria de rede.
+- **Imagem oficial, sem versão enxuta.** Uma derivada sem Java, Node e serviços
+  que não usamos caiu para 791 MB e passou os 17 casos. Mas construída no
+  compose ela obriga a baixar a original primeiro, e publicada num registry
+  vira um artefato a mais em que o avaliador precisa confiar.
+- **`SERVICES=sqs`, `DISABLE_EVENTS=1` e `SKIP_SSL_CERT_DOWNLOAD=1`** baixaram o
+  boot de 2,8 s para 2,0 s.
+- **Filas criadas por hook de inicialização**
+  (`docker/localstack/ready.d/10-create-queues.sh`). O healthcheck consulta a
+  fila em vez do estado do hook: com o script sem permissão de execução, o
+  LocalStack informa a inicialização como concluída mesmo com o hook falhando.
+
+### PostgreSQL 18
+
+O volume fica em `/var/lib/postgresql`, não em `/var/lib/postgresql/data`. A
+partir do 18 a imagem oficial guarda os dados em
+`/var/lib/postgresql/18/docker` e recusa subir quando há algo montado no caminho
+antigo, com volume ou com `tmpfs`.
+
+### Imagem da API
+
+`oven/bun:1.4.2-alpine`, 185 MB. A Alpine foi a menor entre as bases do Bun
+(slim 278 MB, distroless 168 MB), com o mesmo boot (~0,9 s) e a mesma RAM
+(~34 MB). Nenhuma dependência tem addon nativo, então o musl não é problema.
+
+- **Sem etapa de build.** O Bun executa TypeScript direto, então a imagem leva
+  só `node_modules` de produção, `src/` e `tsconfig.json`.
+- **Código do root, processo como `bun`** (UID 1000). O processo não consegue
+  alterar o próprio código.
+- **`.dockerignore` em lista branca.** Só entram `package.json`, `bun.lock`,
+  `tsconfig.json` e `src/`, nunca `.env`.
+
+### MikroORM 7 num projeto CommonJS
+
+O MikroORM 7 só publica ESM. O projeto continua CommonJS: com `module: nodenext`,
+o TypeScript 6 aceita importar ESM a partir de CommonJS. Migrar para ESM
+obrigaria extensão `.js` em todo import relativo. O custo é não poder usar
+`await` no topo de um módulo.
+
+### Restrições do Bun
+
+- **O processo precisa rodar com a raiz do projeto como diretório de trabalho.**
+  O Bun lê o `tsconfig.json` a partir do diretório de execução, e sem ele os
+  decorators do NestJS quebram no boot. O `--tsconfig-override` não resolve:
+  o próprio Bun 1.4.2 acusa um bug interno. Os scripts e o `WORKDIR /app` da
+  imagem garantem isso.
+- **Tipo usado em parâmetro decorado vai com `import type`.** Com
+  `emitDecoratorMetadata`, ele vira referência de valor, e uma interface não
+  existe em runtime.
+- **`SIGTERM` sai com 143 fora de container e 0 dentro.** O NestJS roda os
+  hooks de encerramento e reenvia o sinal ao próprio processo. Como PID 1 no
+  container, o kernel ignora esse reenvio. O teste de processo confere que os
+  hooks rodaram, não o código de saída.
+
+### Readiness
+
+`/health/ready` faz `select 1` no PostgreSQL e `GetQueueUrl` na fila de
+comandos, em paralelo e com 2 s de timeout cada.
+
+- **A app sobe com dependência fora** e reconecta sozinha quando ela volta. O
+  enunciado assume PostgreSQL e SQS temporariamente indisponíveis, e um
+  processo que morre no boot nunca chegaria a responder 503.
+- **`GetQueueUrl` em vez de só testar a porta**, para acusar também fila não
+  provisionada.
+- **O log diz qual dependência caiu e por quê, sem URL de conexão.** Erro com
+  código sai só com o código (`ECONNREFUSED`, ou o SQLSTATE do servidor, cuja
+  mensagem pode trazer valores). Erro sem código, como timeout de conexão, sai
+  com a mensagem: ele não veio do servidor, e o probe só executa comandos
+  constantes.
+- **O pool não esgota com o banco congelado.** O `connectionTimeoutMillis`
+  também limita a espera por uma conexão livre. Com o PostgreSQL pausado, 20
+  chamadas simultâneas responderam 503 em ~1 s, e a API voltou a 200 assim que o
+  banco voltou.
