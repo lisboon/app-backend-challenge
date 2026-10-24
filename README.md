@@ -39,6 +39,9 @@ As portas mudam com `API_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
 | `GET /wallets/:walletId` | `200`, `404` ou `400` se o id não é UUID |
 | `GET /wallets/:walletId/ledger?cursor=...&limit=50` | `200` com `items` e `nextCursor`; limite de 1 a 100; `400` para query inválida e `404` para wallet inexistente |
 | `POST /wallets/:walletId/reconciliation` | Sem corpo; `200` com saldos armazenado/calculado, diferença, consistência e quantidade de entradas; `400` para id inválido e `404` para wallet inexistente |
+| `POST /wagering/transactions` | Header `Idempotency-Key` obrigatório; `201` aplicada, `422` rejeitada com `failureCode`; reenvio repete o resultado com `idempotentReplay: true`; `409` para chave ou `externalTransactionId` com outro payload; `404` para wallet inexistente; `503` se o lock não sai em 2 s |
+| `GET /wagering/transactions/:transactionId` | `200` com a transação e o saldo observado, `404` ou `400` |
+| `GET /providers/:providerId/wagering/transactions/:externalTransactionId` | `200` ou `404` |
 | `GET /metrics` | Texto Prometheus com `wallet_reconciliation_divergences_total` |
 | `GET /health/live` | `200` enquanto o processo está de pé |
 | `GET /health/ready` | `200` com PostgreSQL e SQS alcançáveis; `503` dizendo qual caiu |

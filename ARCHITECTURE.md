@@ -246,7 +246,11 @@ cada um tem um teste que o viola por SQL cru
 | no máximo um lançamento por transação e wallet | `UNIQUE (transaction_id, wallet_id)` |
 | sem atualização perdida | `UNIQUE (wallet_id, wallet_version)` |
 | ledger imutável | trigger que recusa `UPDATE`, `DELETE` e `TRUNCATE` (`P0001`) |
-| moeda e player da transação são os da wallet | FK composta `(wallet_id, player_id, currency)` |
+| lançamento só existe para transação aplicada que move saldo | trigger diferido: a transação está `PROCESSED` e não é `LOSS`, e valor, moeda e player batem com ela e com a wallet |
+| direção coerente com o tipo | o mesmo trigger: `BET` debita; `OPENING`, `WIN` e `REFUND` creditam |
+| transação aplicada que move saldo tem lançamento | trigger diferido em `wager_transactions` |
+| desfecho registra o saldo observado | `CHECK`: `PROCESSED` e `REJECTED` têm `result_balance` e `result_currency`, pendente não tem |
+| `BET` e `WIN` têm valor positivo | `CHECK (kind = 'LOSS' or amount > 0)` |
 | lançamento é da wallet da transação | FK composta `(transaction_id, wallet_id)` |
 | idempotência por provedor | `UNIQUE (provider_id, idempotency_key)` e `UNIQUE (provider_id, external_transaction_id)` |
 | `OPENING` é interno | `CHECK ((provider_id = 'internal') = (kind = 'OPENING'))` |
@@ -271,7 +275,7 @@ entra junto com a outbox, na mesma transação da abertura.
 
 Todo acesso ao banco passa pelo `TransactionManager`, inclusive as leituras.
 O adaptador abre um `EntityManager` isolado (`em.fork()`) por chamada e executa
-o trabalho de `execute` em `READ COMMITTED`. Os gateways recebem o contexto da transação como
+o trabalho de `execute` em `READ COMMITTED`, com `lock_timeout` de 2 s. Os gateways recebem o contexto da transação como
 parâmetro obrigatório, então nenhuma escrita acontece fora de uma transação.
 
 **A tradução de erro do driver é feita pelo código, não pela classe.** Pela API
@@ -282,7 +286,9 @@ aparece nos dois casos:
 | Código | Vira |
 |---|---|
 | `23505` na constraint `wallets_player_currency_uk` | `WALLET_ALREADY_EXISTS` (409) |
-| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `57P01`–`57P03`, timeout de conexão do pool | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
+| `23505` em `wager_tx_idempotency_uk` | nova tentativa do submit, que encontra a transação gravada (seção 8) |
+| `23505` em `wager_tx_external_uk` | `EXTERNAL_TRANSACTION_CONFLICT` (409) |
+| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `57P01`–`57P03`, timeout de conexão do pool, `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
 | qualquer outro | 500, porque é defeito, não condição de negócio |
 
 **Concorrência na abertura.** Vinte `POST /wallets` simultâneos para o mesmo
@@ -334,3 +340,73 @@ métricas automáticas. `GET /metrics` usa o content type desse registro.
 O contador é local ao processo e reinicia com ele; o Prometheus agrega as
 instâncias. As demais métricas da seção 12 entram com os futuros incrementos
 de processamento de apostas, retries, inbox e outbox.
+
+## 8. Submissão de transações de aposta
+
+`POST /wagering/transactions` aceita `BET`, `WIN` e `LOSS`, com o header
+`Idempotency-Key` obrigatório. Tudo acontece numa transação SQL:
+
+1. trava a wallet com `SELECT ... FOR UPDATE`; wallet inexistente é `404`, sem
+   gravar nada;
+2. procura a chave em `(provider_id, idempotency_key)`. Se existe, o payload é
+   comparado pelo `payloadHash`: igual devolve o resultado gravado com
+   `idempotentReplay: true`; diferente é `IDEMPOTENCY_PAYLOAD_CONFLICT` (409);
+3. avalia as regras contra a wallet travada: player dono, moeda e, para `BET`,
+   saldo suficiente;
+4. aplica o movimento pelo agregado `Wallet` (`debit` ou `credit`), grava a
+   wallet condicionada à versão lida e o lançamento; `LOSS` não move saldo;
+5. grava a transação já com o desfecho e o saldo observado.
+
+O lock da wallet é o ponto de serialização: reenvios da mesma chave para a
+mesma wallet esperam o primeiro terminar e encontram a transação gravada.
+A transação é inserida depois do lançamento, então a FK do ledger para a
+transação é verificada no `COMMIT` (`DEFERRABLE INITIALLY DEFERRED`).
+
+A mesma chave enviada para wallets diferentes não compartilha lock. O índice
+único resolve a disputa: o perdedor recebe `23505`, o caso de uso refaz a
+tentativa uma vez com um candidato novo, encontra a transação do vencedor e
+responde conforme o payload. O mesmo `externalTransactionId` com outra chave
+é `EXTERNAL_TRANSACTION_CONFLICT` (409).
+
+`lock_timeout` de 2 s limita a espera pelo lock. Estourado, o PostgreSQL
+devolve `55P03`, que vira `503` com `Retry-After`, sem efeito: o cliente
+reenvia com a mesma chave.
+
+| Desfecho | HTTP | Corpo |
+|---|---|---|
+| aplicada | `201` | `{ transactionId, status: "PROCESSED", failureCode: null, balance, idempotentReplay }` |
+| rejeitada por regra de negócio | `422` | o mesmo corpo com `status: "REJECTED"` e o `failureCode` |
+| reenvio | o mesmo do original | o corpo original com `idempotentReplay: true` |
+
+**`payloadHash`.** `v1:` seguido do SHA-256 em hexadecimal do JSON canônico
+de `{ providerId, externalTransactionId, walletId, playerId, roundId, gameId,
+kind, money: { amount, currency } }`: chaves ordenadas por código UTF-16 em
+todos os níveis, sem espaços, campos ausentes omitidos. O header
+`Idempotency-Key`, o id interno e as datas não entram. Como `amount` só aceita
+uma grafia por quantia (seção 2), o mesmo pedido gera sempre o mesmo hash.
+O prefixo de versão permite trocar o algoritmo sem confundir hashes antigos.
+
+`balance` é o saldo observado no desfecho e fica gravado na transação
+(`result_balance`, `result_currency`). O reenvio devolve esse valor, não o
+saldo atual, porque responde ao pedido original.
+
+**Interpretações adotadas:**
+
+- **Rejeições de negócio são gravadas.** `INSUFFICIENT_BALANCE`,
+  `CURRENCY_MISMATCH` e `WALLET_PLAYER_MISMATCH` viram transações `REJECTED`,
+  consultáveis e idempotentes. Por isso a transação referencia só a wallet; a
+  coerência de player e moeda com o ledger é garantida pelos triggers da
+  seção 5.
+- **Erros de contrato não são gravados.** Payload inválido, `OPENING`, valor
+  zero em `BET` ou `WIN` e chave ausente respondem `400` antes da transação.
+- **`LOSS` aceita valor zero.** Ele só registra o fim da rodada.
+- **Idempotência por provedor.** A mesma chave em provedores diferentes são
+  transações distintas.
+- **Limites de tamanho são de contrato.** `providerId` até 64 caracteres,
+  `externalTransactionId`, `roundId` e `gameId` até 128, `Idempotency-Key` até
+  255, com espaços nas pontas removidos. As colunas são `text`; o limite
+  protege índices e logs, e quem passa dele recebe `400`.
+
+**Limitações:** `REFUND`, `ROLLBACK`, o consumo pela fila e a publicação de
+`WagerTransactionProcessed`, `WagerTransactionRejected` e
+`WalletBalanceChanged` pela outbox entram nos próximos incrementos.
