@@ -3,8 +3,29 @@ import type { TransactionContext } from '../../@shared/domain/transaction/transa
 import type { WalletLedgerEntry } from '../domain/wallet-ledger-entry.entity';
 import type { LedgerGateway } from '../gateway/ledger.gateway';
 import { LedgerEntryModel } from './ledger-entry.model';
+import { LedgerEntryModelMapper } from './ledger-entry.model.mapper';
 
 export class LedgerRepository implements LedgerGateway {
+  async findByWallet(
+    walletId: string,
+    currency: string,
+    page: { beforeVersion?: number; limit: number },
+    trx: TransactionContext,
+  ): Promise<WalletLedgerEntry[]> {
+    const em = entityManagerOf(trx);
+    const rows = await em.find(
+      LedgerEntryModel,
+      {
+        walletId,
+        ...(page.beforeVersion === undefined
+          ? {}
+          : { walletVersion: { $lt: page.beforeVersion } }),
+      },
+      { orderBy: { walletVersion: 'desc' }, limit: page.limit },
+    );
+    return rows.map((row) => LedgerEntryModelMapper.toEntity(row, currency));
+  }
+
   async create(
     entry: WalletLedgerEntry,
     trx: TransactionContext,

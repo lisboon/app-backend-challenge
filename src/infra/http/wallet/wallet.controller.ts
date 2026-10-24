@@ -1,9 +1,28 @@
-import { Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 
 import type { WalletUseCases } from '../../../modules/wallet/factory/wallet.factory';
+import type { ListWalletLedgerUseCaseOutputDto } from '../../../modules/wallet/usecase/list-wallet-ledger/list-wallet-ledger.usecase.dto';
 import type { WalletOutputDto } from '../../../modules/wallet/usecase/wallet.output.dto';
 import { parseRequest } from '../shared/validation/parse-request';
-import { createWalletRequest, walletIdParam } from './wallet.request';
+import {
+  createWalletRequest,
+  ledgerQuery,
+  walletIdParam,
+} from './wallet.request';
+import { encodeLedgerCursor } from './ledger.cursor';
+
+interface WalletLedgerResponse {
+  items: ListWalletLedgerUseCaseOutputDto['items'];
+  nextCursor: string | null;
+}
 
 export const WALLET_USE_CASES = Symbol('WALLET_USE_CASES');
 
@@ -12,6 +31,27 @@ export class WalletController {
   constructor(
     @Inject(WALLET_USE_CASES) private readonly useCases: WalletUseCases,
   ) {}
+
+  @Get(':walletId/ledger')
+  async listLedger(
+    @Param('walletId') walletId: string,
+    @Query() query: unknown,
+  ): Promise<WalletLedgerResponse> {
+    const id = parseRequest(walletIdParam, walletId);
+    const page = parseRequest(ledgerQuery, query);
+    const result = await this.useCases.listLedger.execute({
+      walletId: id,
+      beforeVersion: page.cursor,
+      limit: page.limit,
+    });
+    return {
+      items: result.items,
+      nextCursor:
+        result.nextVersion === null
+          ? null
+          : encodeLedgerCursor(result.nextVersion),
+    };
+  }
 
   @Post()
   create(@Body() body: unknown): Promise<WalletOutputDto> {

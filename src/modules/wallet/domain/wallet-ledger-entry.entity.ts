@@ -63,6 +63,20 @@ export class WalletLedgerEntry {
     return entry;
   }
 
+  static rehydrate(state: CreateLedgerEntryProps): WalletLedgerEntry {
+    return new WalletLedgerEntry(
+      state.id,
+      state.walletId,
+      state.transactionId,
+      state.direction,
+      state.money,
+      state.balanceBefore,
+      state.balanceAfter,
+      state.walletVersion,
+      state.createdAt,
+    );
+  }
+
   isBalanced(): boolean {
     const expected =
       this.direction === LedgerDirection.Credit

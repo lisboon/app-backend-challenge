@@ -64,3 +64,20 @@ describe('WalletLedgerEntry.create', () => {
     ).toThrow(CurrencyMismatchError);
   });
 });
+
+describe('WalletLedgerEntry.rehydrate', () => {
+  it('preserva o estado persistido sem revalidar transições', () => {
+    const state = {
+      id: 'entry',
+      walletId: 'wallet',
+      transactionId: 'transaction',
+      direction: LedgerDirection.Debit,
+      money: brl('0.00'),
+      balanceBefore: brl('0.00'),
+      balanceAfter: brl('0.00'),
+      walletVersion: 0,
+      createdAt: new Date(),
+    };
+    expect(WalletLedgerEntry.rehydrate(state)).toMatchObject(state);
+  });
+});

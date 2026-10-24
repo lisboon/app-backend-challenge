@@ -7,6 +7,7 @@ import { LedgerRepository } from '../repository/ledger.repository';
 import { WalletRepository } from '../repository/wallet.repository';
 import { CreateWalletUseCase } from '../usecase/create-wallet/create-wallet.usecase';
 import { FindWalletByIdUseCase } from '../usecase/find-by-id/find-by-id.usecase';
+import { ListWalletLedgerUseCase } from '../usecase/list-wallet-ledger/list-wallet-ledger.usecase';
 
 export interface WalletFactoryDependencies {
   transactions: TransactionManager;
@@ -15,6 +16,7 @@ export interface WalletFactoryDependencies {
 }
 
 export interface WalletUseCases {
+  listLedger: ListWalletLedgerUseCase;
   create: CreateWalletUseCase;
   findById: FindWalletByIdUseCase;
 }
@@ -22,11 +24,17 @@ export interface WalletUseCases {
 export const WalletFactory = {
   create(dependencies: WalletFactoryDependencies): WalletUseCases {
     const wallets = new WalletRepository();
+    const ledger = new LedgerRepository();
     return {
+      listLedger: new ListWalletLedgerUseCase(
+        dependencies.transactions,
+        wallets,
+        ledger,
+      ),
       create: new CreateWalletUseCase(
         dependencies.transactions,
         wallets,
-        new LedgerRepository(),
+        ledger,
         new OpeningTransactionRepository(new WagerTransactionRepository()),
         dependencies.ids,
         dependencies.clock,
