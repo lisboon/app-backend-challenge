@@ -10,9 +10,10 @@ Cada contexto de negócio fica em `src/modules/<contexto>/`:
 | Pasta | Papel |
 |---|---|
 | `domain/` | entidades e objetos de valor. TypeScript puro |
-| `usecase/` | um caso de uso por operação |
+| `usecase/` | um caso de uso por operação, em `usecase/<ação>/<ação>.usecase.ts` com o DTO ao lado |
 | `gateway/` | as portas: interfaces de repositório e de serviço externo |
-| `repository/` | o adaptador que implementa a porta contra o banco |
+| `repository/` | o adaptador que implementa a porta contra o banco, com o model e o mapper |
+| `factory/` | monta os casos de uso com as dependências concretas |
 | `event/` | os eventos de integração que o contexto publica |
 
 O que é compartilhado entre contextos fica em `src/modules/@shared/`. A borda
@@ -23,8 +24,21 @@ houver arquivo para ela.
 faz `bun run lint` falhar se:
 
 - `domain/` importar NestJS, MikroORM, AWS SDK, class-validator, `infra/`,
-  `gateway/`, `repository/` ou `usecase/`;
-- `usecase/` importar framework, ORM, `infra/` ou `repository/`.
+  `gateway/`, `repository/`, `usecase/` ou `factory/`;
+- `usecase/` importar framework, ORM, `infra/`, `repository/` ou `factory/`.
+
+**Por que existe `factory/`.** O caso de uso não pode importar NestJS, então não
+tem `@Injectable()`, e o container do Nest não consegue construí-lo sozinho. A
+factory faz essa montagem em TypeScript puro, e o módulo Nest a chama com
+`useFactory`. Ela não duplica o DI: é o que permite o caso de uso ficar livre de
+framework. Os testes de integração montam o caso de uso do mesmo jeito, sem
+subir o Nest, e trocam um gateway por um que falha para provar atomicidade.
+
+**Nomes.** Arquivos, casos de uso e gateways seguem o padrão `create`/`findById`
+dos projetos anteriores. Dentro do agregado ficam os verbos do domínio pedidos
+no enunciado: `Wallet.open`, `WalletLedgerEntry.create` e `rehydrate`. O
+`LedgerGateway` só tem `create`, e a ausência de `update` expressa no contrato
+que o ledger não muda.
 
 ## 2. Money
 
@@ -50,6 +64,15 @@ faz `bun run lint` falhar se:
 - **Mensagem de erro sem o valor recebido.** Ele fica numa propriedade separada,
   porque mensagem de exceção vai para log e a seção 12 proíbe payload
   financeiro em log.
+- **No banco, `NUMERIC(20,2)`, e nenhum valor passa por `number`.** `NUMERIC` é
+  decimal exato, não ponto flutuante. A restrição do enunciado é sobre o
+  `number` do JavaScript, que é IEEE 754. O driver entrega `NUMERIC` como
+  string, o model mapeia com `p.decimal('string')` e o `Money.from` recebe a
+  string. O caminho fica coberto em duas camadas: mapear como `number` quebra o
+  `typecheck`, e o teste com `999999999999999999.99` (que como `number` viraria
+  `1000000000000000000`) confere a API e o banco. Outro teste exige que toda
+  coluna de valor seja `numeric(20,2)` e que nenhuma seja `real`, `double` ou
+  `money`.
 
 ## 3. Taxonomia de falha e status HTTP
 
@@ -60,14 +83,14 @@ natureza, ou natureza sem status, não compila.
 A taxonomia cresce com o uso: um código ou uma natureza só existe quando algum
 código de produção o lança.
 
-| Natureza | HTTP | Significado para o provedor | Estado |
-|---|---|---|---|
-| `CONTRACT` | 400 | payload malformado: corrigir antes de reenviar | ativo |
-| `NOT_FOUND` | 404 | recurso consultado não existe | ativo |
-| `BUSINESS` | 422 | payload válido, regra violada: desfecho terminal e auditável | ativo |
-| `INTERNAL` | 500 | defeito do serviço | ativo |
-| `CONFLICT` | 409 | chave já usada com outro conteúdo: reenviar igual não muda nada | entra com idempotência e wallet |
-| `TRANSIENT` | 503 + `Retry-After` | infraestrutura indisponível: reenviar é seguro | entra com o adaptador de banco |
+| Natureza | HTTP | Significado para o provedor |
+|---|---|---|
+| `CONTRACT` | 400 | payload malformado: corrigir antes de reenviar |
+| `CONFLICT` | 409 | o recurso já existe ou a chave já foi usada: reenviar igual não muda nada |
+| `NOT_FOUND` | 404 | recurso consultado não existe |
+| `BUSINESS` | 422 | payload válido, regra violada: desfecho terminal e auditável |
+| `TRANSIENT` | 503 + `Retry-After` | infraestrutura indisponível: reenviar é seguro |
+| `INTERNAL` | 500 | defeito do serviço |
 
 Um único filtro (`HttpErrorFilter`, registrado como `APP_FILTER`) trata toda
 exceção, inclusive as do framework e as inesperadas. Assim, toda resposta de
@@ -197,3 +220,65 @@ comandos, em paralelo e com 2 s de timeout cada.
   também limita a espera por uma conexão livre. Com o PostgreSQL pausado, 20
   chamadas simultâneas responderam 503 em ~1 s, e a API voltou a 200 assim que o
   banco voltou.
+
+## 5. Wallet, ledger e invariantes no schema
+
+A abertura de wallet grava a wallet, a transação interna `OPENING` e o crédito
+de abertura numa única transação SQL. Saldo inicial zero não gera `OPENING` nem
+lançamento. A wallet nasce com `version` 1.
+
+Cada garantia do enunciado tem uma constraint ou um trigger correspondente, e
+cada um tem um teste que o viola por SQL cru
+(`tests/integration/schema.integration.spec.ts`):
+
+| Garantia | No schema |
+|---|---|
+| uma wallet por player e moeda | `UNIQUE (player_id, currency)` |
+| saldo nunca negativo | `CHECK (balance >= 0)`, e nos saldos do lançamento |
+| lançamento fecha a conta | `CHECK` de `balance_after = balance_before ± amount` conforme a direção |
+| no máximo um lançamento por transação e wallet | `UNIQUE (transaction_id, wallet_id)` |
+| sem atualização perdida | `UNIQUE (wallet_id, wallet_version)` |
+| ledger imutável | trigger que recusa `UPDATE`, `DELETE` e `TRUNCATE` (`P0001`) |
+| moeda e player da transação são os da wallet | FK composta `(wallet_id, player_id, currency)` |
+| lançamento é da wallet da transação | FK composta `(transaction_id, wallet_id)` |
+| idempotência por provedor | `UNIQUE (provider_id, idempotency_key)` e `UNIQUE (provider_id, external_transaction_id)` |
+| `OPENING` é interno | `CHECK ((provider_id = 'internal') = (kind = 'OPENING'))` |
+| toda alteração de saldo tem lançamento, e vice-versa | trigger diferido no `COMMIT`: o saldo e a versão da wallet batem com o último lançamento, e cada lançamento continua o saldo do anterior |
+
+**Interpretações adotadas:**
+
+- **O lançamento guarda a versão da wallet** (`wallet_version`), que não está
+  no esqueleto do enunciado. É ela que transforma uma atualização perdida em
+  violação de unicidade e dá ao extrato uma ordem estável.
+- **`initialBalance` é obrigatório** em `POST /wallets`. Para abrir sem saldo,
+  envia-se `"0.00"`.
+- **UUIDs chegam em qualquer caixa e são normalizados para minúsculas**, para a
+  resposta da abertura e a da consulta mostrarem o mesmo valor.
+- **Qualquer código ISO-4217 é aceito.** O modelo é multimoeda e cada moeda tem
+  a sua wallet.
+
+**Limitação:** a abertura ainda não publica `WalletBalanceChanged`. O evento
+entra junto com a outbox, na mesma transação da abertura.
+
+## 6. Transações e erros de banco
+
+Todo acesso ao banco passa pelo `TransactionManager`, inclusive as leituras.
+O adaptador abre um `EntityManager` isolado (`em.fork()`) por chamada e executa
+o trabalho em `READ COMMITTED`. Os gateways recebem o contexto da transação como
+parâmetro obrigatório, então nenhuma escrita acontece fora de uma transação.
+
+**A tradução de erro do driver é feita pelo código, não pela classe.** Pela API
+de entidades, o MikroORM embrulha o erro (`UniqueConstraintViolationException`);
+pela execução SQL direta, devolve o `DatabaseError` cru do driver. O código
+aparece nos dois casos:
+
+| Código | Vira |
+|---|---|
+| `23505` na constraint `wallets_player_currency_uk` | `WALLET_ALREADY_EXISTS` (409) |
+| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `57P01`–`57P03`, timeout de conexão do pool | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
+| qualquer outro | 500, porque é defeito, não condição de negócio |
+
+**Concorrência na abertura.** Vinte `POST /wallets` simultâneos para o mesmo
+player e moeda resultam em um 201 e dezenove 409. O índice único serializa as
+inserções, e a tradução do `23505` faz o conflito chegar como resposta de
+contrato, não como 500.
