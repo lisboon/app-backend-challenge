@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Inject,
   Param,
   Post,
@@ -10,6 +11,7 @@ import {
 
 import type { WalletUseCases } from '../../../modules/wallet/factory/wallet.factory';
 import type { ListWalletLedgerUseCaseOutputDto } from '../../../modules/wallet/usecase/list-wallet-ledger/list-wallet-ledger.usecase.dto';
+import type { ReconcileWalletUseCaseOutputDto } from '../../../modules/wallet/usecase/reconcile-wallet/reconcile-wallet.usecase.dto';
 import type { WalletOutputDto } from '../../../modules/wallet/usecase/wallet.output.dto';
 import { parseRequest } from '../shared/validation/parse-request';
 import {
@@ -51,6 +53,16 @@ export class WalletController {
           ? null
           : encodeLedgerCursor(result.nextVersion),
     };
+  }
+
+  @Post(':walletId/reconciliation')
+  @HttpCode(200)
+  reconcile(
+    @Param('walletId') walletId: string,
+  ): Promise<ReconcileWalletUseCaseOutputDto> {
+    return this.useCases.reconcile.execute({
+      walletId: parseRequest(walletIdParam, walletId),
+    });
   }
 
   @Post()

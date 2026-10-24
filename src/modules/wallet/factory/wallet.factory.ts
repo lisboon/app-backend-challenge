@@ -3,19 +3,23 @@ import type { Clock } from '../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../@shared/gateway/id-generator.gateway';
 import { OpeningTransactionRepository } from '../../wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../wagering/repository/wager-transaction.repository';
+import type { ReconciliationMonitor } from '../gateway/reconciliation-monitor.gateway';
 import { LedgerRepository } from '../repository/ledger.repository';
 import { WalletRepository } from '../repository/wallet.repository';
 import { CreateWalletUseCase } from '../usecase/create-wallet/create-wallet.usecase';
 import { FindWalletByIdUseCase } from '../usecase/find-by-id/find-by-id.usecase';
 import { ListWalletLedgerUseCase } from '../usecase/list-wallet-ledger/list-wallet-ledger.usecase';
+import { ReconcileWalletUseCase } from '../usecase/reconcile-wallet/reconcile-wallet.usecase';
 
 export interface WalletFactoryDependencies {
+  monitor: ReconciliationMonitor;
   transactions: TransactionManager;
   ids: IdGenerator;
   clock: Clock;
 }
 
 export interface WalletUseCases {
+  reconcile: ReconcileWalletUseCase;
   listLedger: ListWalletLedgerUseCase;
   create: CreateWalletUseCase;
   findById: FindWalletByIdUseCase;
@@ -26,6 +30,12 @@ export const WalletFactory = {
     const wallets = new WalletRepository();
     const ledger = new LedgerRepository();
     return {
+      reconcile: new ReconcileWalletUseCase(
+        dependencies.transactions,
+        wallets,
+        ledger,
+        dependencies.monitor,
+      ),
       listLedger: new ListWalletLedgerUseCase(
         dependencies.transactions,
         wallets,

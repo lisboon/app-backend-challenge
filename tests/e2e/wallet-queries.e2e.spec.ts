@@ -34,7 +34,7 @@ describe('validação HTTP do extrato sem infraestrutura', () => {
     });
   });
 
-  it.each(['ledger'])(
+  it.each(['ledger', 'reconciliation'])(
     'recusa UUID inválido em %s',
     async (route) => {
       const response = await fetch(baseUrl + '/wallets/abc/' + route, {

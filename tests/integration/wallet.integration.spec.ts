@@ -417,6 +417,14 @@ describe('wallets (integração HTTP com PostgreSQL real)', () => {
           }),
       ],
       ['consulta', () => fetch(`${downUrl}/wallets/${uuid()}`)],
+      ['extrato', () => fetch(`${downUrl}/wallets/${uuid()}/ledger`)],
+      [
+        'reconciliação',
+        () =>
+          fetch(`${downUrl}/wallets/${uuid()}/reconciliation`, {
+            method: 'POST',
+          }),
+      ],
     ])('%s responde 503 com Retry-After', async (_caso, request) => {
       const response = await request();
 

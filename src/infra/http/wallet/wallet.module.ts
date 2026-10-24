@@ -7,7 +7,9 @@ import {
   WalletFactory,
   type WalletUseCases,
 } from '../../../modules/wallet/factory/wallet.factory';
+import type { ReconciliationMonitor } from '../../../modules/wallet/gateway/reconciliation-monitor.gateway';
 import { TRANSACTION_MANAGER } from '../../database/database.module';
+import { RECONCILIATION_MONITOR } from '../../observability/observability.module';
 import { CLOCK, ID_GENERATOR } from '../../runtime/runtime.module';
 import { WALLET_USE_CASES, WalletController } from './wallet.controller';
 
@@ -16,12 +18,19 @@ import { WALLET_USE_CASES, WalletController } from './wallet.controller';
   providers: [
     {
       provide: WALLET_USE_CASES,
-      inject: [TRANSACTION_MANAGER, ID_GENERATOR, CLOCK],
+      inject: [
+        TRANSACTION_MANAGER,
+        ID_GENERATOR,
+        CLOCK,
+        RECONCILIATION_MONITOR,
+      ],
       useFactory: (
         transactions: TransactionManager,
         ids: IdGenerator,
         clock: Clock,
-      ): WalletUseCases => WalletFactory.create({ transactions, ids, clock }),
+        monitor: ReconciliationMonitor,
+      ): WalletUseCases =>
+        WalletFactory.create({ transactions, ids, clock, monitor }),
     },
   ],
 })

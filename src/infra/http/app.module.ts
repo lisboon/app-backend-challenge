@@ -1,6 +1,7 @@
 import { Logger, Module, OnApplicationShutdown } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 
+import { ObservabilityModule } from '../observability/observability.module';
 import { ConfigModule } from '../config/config.module';
 import { DatabaseModule } from '../database/database.module';
 import { QueueModule } from '../queue/queue.module';
@@ -13,6 +14,7 @@ import { WalletModule } from './wallet/wallet.module';
   imports: [
     ConfigModule,
     RuntimeModule,
+    ObservabilityModule,
     DatabaseModule,
     QueueModule,
     HealthModule,
