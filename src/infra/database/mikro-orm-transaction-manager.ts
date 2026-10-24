@@ -1,4 +1,4 @@
-import { IsolationLevel } from '@mikro-orm/core';
+import { IsolationLevel, type TransactionOptions } from '@mikro-orm/core';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
 import { InfrastructureUnavailableError } from '../../modules/@shared/domain/errors/infrastructure.errors';
@@ -25,12 +25,27 @@ export class MikroOrmTransactionManager implements TransactionManager {
   constructor(private readonly orm: MikroORM) {}
 
   async execute<T>(work: (trx: TransactionContext) => Promise<T>): Promise<T> {
+    return this.run(work, { isolationLevel: IsolationLevel.READ_COMMITTED });
+  }
+
+  snapshot<T>(work: (trx: TransactionContext) => Promise<T>): Promise<T> {
+    return this.run(work, {
+      isolationLevel: IsolationLevel.REPEATABLE_READ,
+      readOnly: true,
+    });
+  }
+
+  private async run<T>(
+    work: (trx: TransactionContext) => Promise<T>,
+    options: TransactionOptions,
+  ): Promise<T> {
     try {
       return await this.orm.em
         .fork()
-        .transactional((em) => work(new MikroOrmTransactionContext(em)), {
-          isolationLevel: IsolationLevel.READ_COMMITTED,
-        });
+        .transactional(
+          (em) => work(new MikroOrmTransactionContext(em)),
+          options,
+        );
     } catch (error) {
       if (isConnectionFailure(error)) {
         throw new InfrastructureUnavailableError('PostgreSQL');

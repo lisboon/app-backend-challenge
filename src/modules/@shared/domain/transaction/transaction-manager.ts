@@ -3,5 +3,6 @@ export abstract class TransactionContext {
 }
 
 export interface TransactionManager {
+  snapshot<T>(work: (trx: TransactionContext) => Promise<T>): Promise<T>;
   execute<T>(work: (trx: TransactionContext) => Promise<T>): Promise<T>;
 }
