@@ -31,6 +31,13 @@
                   "**/factory/**"
                 ],
                 "message": "O domínio é TypeScript puro: framework, ORM e adaptadores entram por portas."
+              },
+              {
+                "group": [
+                  "**/wallet/**",
+                  "**/wagering/**"
+                ],
+                "message": "Um contexto só conhece outro pela factory: domain, usecase e gateway falam com portas do próprio contexto."
               }
             ]
           }
@@ -58,6 +65,46 @@
                   "**/factory/**"
                 ],
                 "message": "Use case depende do domínio e de portas (gateway/). Framework, persistência e transporte ficam na borda."
+              },
+              {
+                "group": [
+                  "**/wallet/**",
+                  "**/wagering/**"
+                ],
+                "message": "Um contexto só conhece outro pela factory: domain, usecase e gateway falam com portas do próprio contexto."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/modules/**/gateway/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@nestjs/*",
+                  "@mikro-orm/*",
+                  "@aws-sdk/*",
+                  "**/infra/**",
+                  "**/repository/**",
+                  "**/usecase/**",
+                  "**/factory/**"
+                ],
+                "message": "Gateway é contrato: depende só do domínio."
+              },
+              {
+                "group": [
+                  "**/wallet/**",
+                  "**/wagering/**"
+                ],
+                "message": "Um contexto só conhece outro pela factory: domain, usecase e gateway falam com portas do próprio contexto."
               }
             ]
           }

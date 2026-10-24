@@ -25,7 +25,14 @@ faz `bun run lint` falhar se:
 
 - `domain/` importar NestJS, MikroORM, AWS SDK, class-validator, `infra/`,
   `gateway/`, `repository/`, `usecase/` ou `factory/`;
-- `usecase/` importar framework, ORM, `infra/`, `repository/` ou `factory/`.
+- `usecase/` importar framework, ORM, `infra/`, `repository/` ou `factory/`;
+- `domain/`, `usecase/` ou `gateway/` de um contexto importar outro contexto.
+
+**Contextos conversam por portas de quem consome.** A abertura de wallet precisa
+registrar a transação interna `OPENING`, que pertence ao contexto de apostas. Em
+vez de o caso de uso da wallet conhecer o domínio de apostas, a wallet declara
+`OpeningTransactionGateway` com o que precisa, o contexto de apostas fornece o
+adaptador (`OpeningTransactionRepository`) e a `WalletFactory` liga os dois.
 
 **Por que existe `factory/`.** O caso de uso não pode importar NestJS, então não
 tem `@Injectable()`, e o container do Nest não consegue construí-lo sozinho. A

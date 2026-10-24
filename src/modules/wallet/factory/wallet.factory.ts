@@ -1,6 +1,7 @@
 import type { TransactionManager } from '../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../@shared/gateway/id-generator.gateway';
+import { OpeningTransactionRepository } from '../../wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../wagering/repository/wager-transaction.repository';
 import { LedgerRepository } from '../repository/ledger.repository';
 import { WalletRepository } from '../repository/wallet.repository';
@@ -26,7 +27,7 @@ export const WalletFactory = {
         dependencies.transactions,
         wallets,
         new LedgerRepository(),
-        new WagerTransactionRepository(),
+        new OpeningTransactionRepository(new WagerTransactionRepository()),
         dependencies.ids,
         dependencies.clock,
       ),

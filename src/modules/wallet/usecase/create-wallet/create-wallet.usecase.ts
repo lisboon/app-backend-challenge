@@ -2,10 +2,9 @@ import { Money } from '../../../@shared/domain/money';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../../@shared/gateway/id-generator.gateway';
-import { WagerTransaction } from '../../../wagering/domain/wager-transaction.entity';
-import type { WagerTransactionGateway } from '../../../wagering/gateway/wager-transaction.gateway';
 import { Wallet } from '../../domain/wallet.entity';
 import type { LedgerGateway } from '../../gateway/ledger.gateway';
+import type { OpeningTransactionGateway } from '../../gateway/opening-transaction.gateway';
 import type { WalletGateway } from '../../gateway/wallet.gateway';
 import { toWalletOutput } from '../wallet.output.dto';
 import type {
@@ -19,7 +18,7 @@ export class CreateWalletUseCase implements CreateWalletUseCaseInterface {
     private readonly transactions: TransactionManager,
     private readonly wallets: WalletGateway,
     private readonly ledger: LedgerGateway,
-    private readonly wagerTransactions: WagerTransactionGateway,
+    private readonly openings: OpeningTransactionGateway,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
   ) {}
@@ -40,14 +39,16 @@ export class CreateWalletUseCase implements CreateWalletUseCaseInterface {
     await this.transactions.execute(async (trx) => {
       await this.wallets.create(wallet, trx);
       if (openingEntry) {
-        const opening = WagerTransaction.opening({
-          id: openingEntry.transactionId,
-          walletId: wallet.id,
-          playerId: wallet.playerId,
-          money: openingEntry.money,
-          at,
-        });
-        await this.wagerTransactions.create(opening, trx);
+        await this.openings.create(
+          {
+            id: openingEntry.transactionId,
+            walletId: wallet.id,
+            playerId: wallet.playerId,
+            money: openingEntry.money,
+            at,
+          },
+          trx,
+        );
         await this.ledger.create(openingEntry, trx);
       }
     });
