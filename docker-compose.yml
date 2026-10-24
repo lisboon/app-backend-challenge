@@ -1,0 +1,69 @@
+name: wagering-processor
+
+x-postgres: &postgres
+  image: postgres:18.6-alpine@sha256:898c60cb390d1085bc97bdd6a1ae968757421df394b071848b52b1c09c89d6a5
+  environment:
+    POSTGRES_USER: ${POSTGRES_USER:-wager}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wager}
+    POSTGRES_DB: ${POSTGRES_DB:-wager}
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+
+x-sqs: &sqs
+  image: localstack/localstack:4.12@sha256:0df3a97da57de03a588c05d9b8f390f15c7033fc7c4512f94619d344bc3cd317
+  environment:
+    SERVICES: sqs
+    DISABLE_EVENTS: "1"
+    SKIP_SSL_CERT_DOWNLOAD: "1"
+  volumes:
+    - ./docker/localstack/ready.d:/etc/localstack/init/ready.d:ro
+  healthcheck:
+    test: ["CMD", "awslocal", "sqs", "get-queue-url", "--queue-name", "wager-transactions.fifo"]
+    interval: 2s
+    timeout: 5s
+    retries: 30
+
+services:
+  postgres:
+    <<: *postgres
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql"]
+
+  sqs:
+    <<: *sqs
+    ports: ["127.0.0.1:${SQS_PORT:-4566}:4566"]
+
+  api:
+    build: .
+    image: wagering-processor:local
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wager}:${POSTGRES_PASSWORD:-wager}@postgres:5432/${POSTGRES_DB:-wager}
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_ENDPOINT: http://sqs:4566
+      WAGER_QUEUE_NAME: wager-transactions.fifo
+    ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sqs:
+        condition: service_healthy
+
+  postgres-test:
+    <<: *postgres
+    profiles: ["test"]
+    ports: ["127.0.0.1:5433:5432"]
+    tmpfs: ["/var/lib/postgresql"]
+
+  sqs-test:
+    <<: *sqs
+    profiles: ["test"]
+    ports: ["127.0.0.1:4567:4566"]
+
+volumes:
+  postgres-data:
