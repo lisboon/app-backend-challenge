@@ -12,9 +12,15 @@
     "test": "bun test tests/unit",
     "test:watch": "bun test --watch tests/unit",
     "test:cov": "bun test --coverage tests/unit",
-    "test:e2e": "bun test tests/e2e"
+    "test:e2e": "bun test tests/e2e",
+    "test:integration": "bun test --timeout 30000 tests/integration",
+    "infra:test:up": "docker compose --profile test up -d --wait postgres-test sqs-test",
+    "infra:test:down": "docker compose --profile test rm -sfv postgres-test sqs-test"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "3.1149.0",
+    "@mikro-orm/core": "7.2.5",
+    "@mikro-orm/postgresql": "7.2.5",
     "@nestjs/common": "^12.0.1",
     "@nestjs/core": "^12.0.1",
     "@nestjs/platform-express": "^12.0.1",

@@ -7,11 +7,10 @@ import {
   Logger,
   Param,
 } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 
-import { AppModule } from '../../src/infra/http/app.module';
 import { DomainError } from '../../src/modules/@shared/domain/errors/domain.error';
 import { FailureCode } from '../../src/modules/@shared/domain/failure-code';
+import { startApp } from '../support/http-app';
 
 class ProbeError extends DomainError {
   constructor(code: FailureCode) {
@@ -49,14 +48,7 @@ describe('envelope de erro HTTP (e2e)', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-      controllers: [ProbeController],
-    }).compile();
-
-    app = moduleRef.createNestApplication({ logger: false });
-    await app.listen(0);
-    baseUrl = await app.getUrl();
+    ({ app, baseUrl } = await startApp({}, { controllers: [ProbeController] }));
   });
 
   afterAll(async () => {
