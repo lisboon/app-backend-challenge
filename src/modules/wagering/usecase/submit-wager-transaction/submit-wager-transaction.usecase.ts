@@ -1,9 +1,6 @@
 import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
 import { Money } from '../../../@shared/domain/money';
-import type {
-  TransactionContext,
-  TransactionManager,
-} from '../../../@shared/domain/transaction/transaction-manager';
+import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../../@shared/gateway/id-generator.gateway';
 import {
@@ -74,7 +71,7 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
       if (recorded) {
         return this.replay(recorded, candidate);
       }
-      await this.settle(candidate, wallet, trx);
+      await this.settle(candidate, wallet);
       await this.wagers.create(candidate, trx);
       return toOutput(candidate, false);
     });
@@ -93,7 +90,6 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
   private async settle(
     candidate: WagerTransaction,
     wallet: LockedWallet,
-    trx: TransactionContext,
   ): Promise<void> {
     const at = candidate.createdAt;
     const rejection = candidate.rejectionFor(wallet);
@@ -102,17 +98,13 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
       return;
     }
     const balance = candidate.affectsBalance()
-      ? await this.wallets.apply(
-          {
-            walletId: wallet.id,
-            transactionId: candidate.id,
-            entryId: this.ids.next(),
-            direction: candidate.ledgerDirectionFor(),
-            money: candidate.money,
-            at,
-          },
-          trx,
-        )
+      ? await wallet.apply({
+          transactionId: candidate.id,
+          entryId: this.ids.next(),
+          direction: candidate.ledgerDirectionFor(),
+          money: candidate.money,
+          at,
+        })
       : wallet.balance;
     candidate.markProcessed(balance, at);
   }

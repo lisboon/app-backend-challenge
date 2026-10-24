@@ -5,12 +5,7 @@ import type {
   TargetWallet,
 } from '../domain/wager-transaction.entity';
 
-export interface LockedWallet extends TargetWallet {
-  id: string;
-}
-
 export interface WalletMovement {
-  walletId: string;
   transactionId: string;
   entryId: string;
   direction: MovementDirection;
@@ -18,7 +13,11 @@ export interface WalletMovement {
   at: Date;
 }
 
+export interface LockedWallet extends TargetWallet {
+  id: string;
+  apply(movement: WalletMovement): Promise<Money>;
+}
+
 export interface WalletMovementGateway {
   lock(walletId: string, trx: TransactionContext): Promise<LockedWallet | null>;
-  apply(movement: WalletMovement, trx: TransactionContext): Promise<Money>;
 }
