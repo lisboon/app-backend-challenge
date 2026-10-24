@@ -8,6 +8,7 @@ import { QueueModule } from '../queue/queue.module';
 import { RuntimeModule } from '../runtime/runtime.module';
 import { HealthModule } from './health/health.module';
 import { HttpErrorFilter } from './shared/errors/http-error.filter';
+import { WageringModule } from './wagering/wagering.module';
 import { WalletModule } from './wallet/wallet.module';
 
 @Module({
@@ -19,6 +20,7 @@ import { WalletModule } from './wallet/wallet.module';
     QueueModule,
     HealthModule,
     WalletModule,
+    WageringModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: HttpErrorFilter }],
 })
