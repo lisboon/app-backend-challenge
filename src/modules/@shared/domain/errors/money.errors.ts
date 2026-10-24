@@ -2,7 +2,6 @@ import { FailureCode } from '../failure-code';
 import { DomainError } from './domain.error';
 
 export class InvalidMoneyError extends DomainError {
-  readonly reason: string;
   readonly received: unknown;
 
   constructor(reason: string, received: unknown) {
@@ -10,7 +9,6 @@ export class InvalidMoneyError extends DomainError {
       FailureCode.MONEY_INVALID_FORMAT,
       `valor monetário inválido: ${reason}`,
     );
-    this.reason = reason;
     this.received = received;
   }
 }
@@ -28,10 +26,7 @@ export class InvalidCurrencyError extends DomainError {
 }
 
 export class CurrencyMismatchError extends DomainError {
-  constructor(
-    readonly left: string,
-    readonly right: string,
-  ) {
+  constructor(left: string, right: string) {
     super(
       FailureCode.CURRENCY_MISMATCH,
       `operação entre moedas diferentes: ${left} e ${right}`,
@@ -40,7 +35,7 @@ export class CurrencyMismatchError extends DomainError {
 }
 
 export class MoneyOverflowError extends DomainError {
-  constructor(readonly maxIntegerDigits: number) {
+  constructor(maxIntegerDigits: number) {
     super(
       FailureCode.MONEY_OUT_OF_RANGE,
       `resultado excede a faixa representável de ${maxIntegerDigits} dígitos inteiros`,

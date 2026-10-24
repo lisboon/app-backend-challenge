@@ -23,8 +23,10 @@ const Decimal = GlobalDecimal.clone({
   toExpPos: 40,
 });
 
+type DecimalValue = InstanceType<typeof Decimal>;
+
 const DECIMAL_STRING = new RegExp(
-  `^-?\\d{1,${MAX_INTEGER_DIGITS}}(\\.\\d{1,${SCALE}})?$`,
+  `^(0|[1-9]\\d{0,${MAX_INTEGER_DIGITS - 1}})\\.\\d{${SCALE}}$`,
 );
 
 const ISO_4217 = /^[A-Z]{3}$/;
@@ -33,7 +35,7 @@ const MAX_MAGNITUDE = new Decimal(10).pow(MAX_INTEGER_DIGITS);
 
 export class Money {
   private constructor(
-    private readonly value: InstanceType<typeof Decimal>,
+    private readonly value: DecimalValue,
     public readonly currency: string,
   ) {}
 
@@ -91,9 +93,6 @@ export class Money {
   }
 
   toString(): string {
-    if (this.value.isZero()) {
-      return new Decimal(0).toFixed(SCALE);
-    }
     return this.value.toFixed(SCALE);
   }
 
@@ -103,26 +102,20 @@ export class Money {
     }
   }
 
-  private static of(
-    value: InstanceType<typeof Decimal>,
-    currency: string,
-  ): Money {
+  private static of(value: DecimalValue, currency: string): Money {
     if (value.abs().greaterThanOrEqualTo(MAX_MAGNITUDE)) {
       throw new MoneyOverflowError(MAX_INTEGER_DIGITS);
     }
     return new Money(value, currency);
   }
 
-  private static parseAmount(amount: string): InstanceType<typeof Decimal> {
+  private static parseAmount(amount: string): DecimalValue {
     if (typeof amount !== 'string') {
       throw new InvalidMoneyError('esperado string decimal', amount);
     }
-    if (amount.length === 0) {
-      throw new InvalidMoneyError('string vazia', amount);
-    }
     if (!DECIMAL_STRING.test(amount)) {
       throw new InvalidMoneyError(
-        `formato deve ser decimal com até ${MAX_INTEGER_DIGITS} dígitos inteiros e ${SCALE} casas`,
+        `formato deve ser decimal não negativo com até ${MAX_INTEGER_DIGITS} dígitos inteiros e exatamente ${SCALE} casas`,
         amount,
       );
     }
