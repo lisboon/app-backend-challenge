@@ -3,10 +3,15 @@ export const FailureCode = {
   MONEY_INVALID_FORMAT: 'MONEY_INVALID_FORMAT',
   CURRENCY_INVALID: 'CURRENCY_INVALID',
 
+  WALLET_ALREADY_EXISTS: 'WALLET_ALREADY_EXISTS',
+
   RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
+  WALLET_NOT_FOUND: 'WALLET_NOT_FOUND',
 
   CURRENCY_MISMATCH: 'CURRENCY_MISMATCH',
   MONEY_OUT_OF_RANGE: 'MONEY_OUT_OF_RANGE',
+
+  INFRASTRUCTURE_UNAVAILABLE: 'INFRASTRUCTURE_UNAVAILABLE',
 
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
@@ -15,8 +20,10 @@ export type FailureCode = (typeof FailureCode)[keyof typeof FailureCode];
 
 export const FailureKind = {
   CONTRACT: 'CONTRACT',
+  CONFLICT: 'CONFLICT',
   NOT_FOUND: 'NOT_FOUND',
   BUSINESS: 'BUSINESS',
+  TRANSIENT: 'TRANSIENT',
   INTERNAL: 'INTERNAL',
 } as const;
 
@@ -27,10 +34,15 @@ const KIND_BY_CODE: Readonly<Record<FailureCode, FailureKind>> = {
   [FailureCode.MONEY_INVALID_FORMAT]: FailureKind.CONTRACT,
   [FailureCode.CURRENCY_INVALID]: FailureKind.CONTRACT,
 
+  [FailureCode.WALLET_ALREADY_EXISTS]: FailureKind.CONFLICT,
+
   [FailureCode.RESOURCE_NOT_FOUND]: FailureKind.NOT_FOUND,
+  [FailureCode.WALLET_NOT_FOUND]: FailureKind.NOT_FOUND,
 
   [FailureCode.CURRENCY_MISMATCH]: FailureKind.BUSINESS,
   [FailureCode.MONEY_OUT_OF_RANGE]: FailureKind.BUSINESS,
+
+  [FailureCode.INFRASTRUCTURE_UNAVAILABLE]: FailureKind.TRANSIENT,
 
   [FailureCode.INTERNAL_ERROR]: FailureKind.INTERNAL,
 };

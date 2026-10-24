@@ -382,14 +382,19 @@ describe('contrato SQS que a solução usa', () => {
   it('recusa envio para FIFO sem MessageGroupId', async () => {
     const queue = await createQueue('c16');
 
-    await expect(
-      sqs.send(
+    const failure = await sqs
+      .send(
         new SendMessageCommand({
           QueueUrl: queue.url,
           MessageBody: 'x',
           MessageDeduplicationId: 'd',
         }),
-      ),
-    ).rejects.toThrow();
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(Error);
   });
 });

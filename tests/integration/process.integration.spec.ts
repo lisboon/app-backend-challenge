@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 import { testInfra, WAGER_QUEUE_NAME } from '../support/http-app';
 
-const ROOT = resolve(import.meta.dir, '../..');
+const ROOT = resolve(__dirname, '../..');
 const MAIN = 'src/infra/http/main.ts';
 const BOOT_TIMEOUT_MS = 15_000;
 const EXIT_TIMEOUT_MS = 5_000;

@@ -3,8 +3,8 @@
 Solução do desafio técnico da Jungle Gaming. O enunciado está em
 [`CHALLENGE.md`](CHALLENGE.md) e as decisões em [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-> Em construção. Este README lista só o que já existe. Os endpoints de negócio
-> entram nos próximos incrementos.
+> Em construção. Este README lista só o que já existe. As transações de aposta
+> e o consumidor SQS entram nos próximos incrementos.
 
 ## Pré-requisitos
 
@@ -18,9 +18,10 @@ docker compose up -d --wait
 curl http://127.0.0.1:3000/health/ready
 ```
 
-O `--wait` só retorna quando PostgreSQL, SQS e a API estão saudáveis. As filas
+O `--wait` só retorna quando PostgreSQL, SQS e a API estão saudáveis. Antes da
+API subir, o serviço `migrate` aplica as migrations e termina. As filas
 `wager-transactions.fifo` e `wager-transactions-dlq.fifo` são criadas pelo
-LocalStack na subida, sem nenhum passo manual.
+LocalStack na subida. Nenhum passo é manual.
 
 | Serviço | Endereço local |
 |---|---|
@@ -30,12 +31,23 @@ LocalStack na subida, sem nenhum passo manual.
 
 As portas mudam com `API_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
 
-## Health checks
+## Endpoints
 
-| Endpoint | Responde |
+| Método e rota | Responde |
 |---|---|
+| `POST /wallets` | `201` com a wallet; `409` se o player já tem wallet nessa moeda; `400` se o payload é inválido |
+| `GET /wallets/:walletId` | `200`, `404` ou `400` se o id não é UUID |
 | `GET /health/live` | `200` enquanto o processo está de pé |
 | `GET /health/ready` | `200` com PostgreSQL e SQS alcançáveis; `503` dizendo qual caiu |
+
+Com o PostgreSQL indisponível, os endpoints de wallet respondem `503` com
+`Retry-After`. Todo erro sai no envelope `{ statusCode, failureCode, message }`.
+
+```bash
+curl -X POST http://127.0.0.1:3000/wallets \
+  -H 'content-type: application/json' \
+  -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
+```
 
 ## Rodar a API fora do container
 
@@ -43,8 +55,12 @@ As portas mudam com `API_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
 docker compose up -d --wait postgres sqs
 cp .env.example .env
 bun install
+bun run migrate:up
 bun run dev
 ```
+
+`migrate:down` reverte a última migration e `migrate:status` lista as aplicadas
+e as pendentes.
 
 ## Testes
 
@@ -57,15 +73,18 @@ bun run infra:test:down
 ```
 
 A infraestrutura de teste usa banco em `tmpfs` e não toca nos dados do ambiente
-local. Os endereços dela estão em `.env.test`, que o `bun test` carrega sozinho.
+local. Cada suíte de integração reverte todas as migrations e as aplica de novo
+antes de rodar. Os endereços estão em `.env.test`, que o `bun test` carrega
+sozinho.
 
 ## Qualidade
 
 ```bash
-bun run lint    # oxlint, incluindo as regras de boundary entre camadas
-bun run build   # checagem de tipos
+bun run lint       # oxlint, incluindo as regras de boundary entre camadas
+bun run typecheck  # tipos de src/ e tests/
+bun run build      # build de produção
 ```
 
-O CI (`.github/workflows/ci.yml`) roda unidade, e2e, lint e build, e num segundo
-job sobe a infraestrutura real, roda a integração e valida a stack inteira com
-`docker compose up --wait --build`.
+O CI (`.github/workflows/ci.yml`) roda unidade, e2e, lint, typecheck e build. Num
+segundo job, sobe a infraestrutura real, roda a integração e valida a stack
+inteira com `docker compose up --wait --build`.

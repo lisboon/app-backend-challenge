@@ -5,8 +5,12 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "bun run --watch src/infra/http/main.ts",
     "start": "bun run src/infra/http/main.ts",
+    "migrate:up": "bun src/infra/database/migrate.ts up",
+    "migrate:down": "bun src/infra/database/migrate.ts down",
+    "migrate:status": "bun src/infra/database/migrate.ts status",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "lint": "oxlint --type-aware src/ tests/",
     "test": "bun test tests/unit",
@@ -20,13 +24,15 @@
   "dependencies": {
     "@aws-sdk/client-sqs": "3.1149.0",
     "@mikro-orm/core": "7.2.5",
+    "@mikro-orm/migrations": "7.2.5",
     "@mikro-orm/postgresql": "7.2.5",
     "@nestjs/common": "^12.0.1",
     "@nestjs/core": "^12.0.1",
     "@nestjs/platform-express": "^12.0.1",
     "decimal.js": "^10.6.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@nestjs/cli": "^12.0.0",

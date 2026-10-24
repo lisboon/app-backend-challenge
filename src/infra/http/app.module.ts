@@ -4,11 +4,20 @@ import { APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '../config/config.module';
 import { DatabaseModule } from '../database/database.module';
 import { QueueModule } from '../queue/queue.module';
+import { RuntimeModule } from '../runtime/runtime.module';
 import { HealthModule } from './health/health.module';
 import { HttpErrorFilter } from './shared/errors/http-error.filter';
+import { WalletModule } from './wallet/wallet.module';
 
 @Module({
-  imports: [ConfigModule, DatabaseModule, QueueModule, HealthModule],
+  imports: [
+    ConfigModule,
+    RuntimeModule,
+    DatabaseModule,
+    QueueModule,
+    HealthModule,
+    WalletModule,
+  ],
   providers: [{ provide: APP_FILTER, useClass: HttpErrorFilter }],
 })
 export class AppModule implements OnApplicationShutdown {

@@ -15,7 +15,7 @@ import {
 describe('taxonomia de falha', () => {
   it('mantém o código igual ao nome, para o valor não divergir da chave', () => {
     for (const [name, value] of Object.entries(FailureCode)) {
-      expect(value).toBe(name);
+      expect<string>(value).toBe(name);
     }
   });
 

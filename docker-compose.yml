@@ -36,6 +36,18 @@ services:
     <<: *sqs
     ports: ["127.0.0.1:${SQS_PORT:-4566}:4566"]
 
+  migrate:
+    build: .
+    image: wagering-processor:local
+    command: ["bun", "src/infra/database/migrate.ts", "up"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wager}:${POSTGRES_PASSWORD:-wager}@postgres:5432/${POSTGRES_DB:-wager}
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
     image: wagering-processor:local
@@ -49,8 +61,8 @@ services:
       WAGER_QUEUE_NAME: wager-transactions.fifo
     ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       sqs:
         condition: service_healthy
 

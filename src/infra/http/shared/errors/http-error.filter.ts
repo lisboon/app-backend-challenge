@@ -12,15 +12,20 @@ import { DomainError } from '../../../../modules/@shared/domain/errors/domain.er
 import {
   FailureCode,
   FailureKind,
+  failureKindOf,
 } from '../../../../modules/@shared/domain/failure-code';
 import { HttpErrorResponseDto } from './error.response.dto';
 
 const STATUS_BY_KIND: Readonly<Record<FailureKind, HttpStatus>> = {
   [FailureKind.CONTRACT]: HttpStatus.BAD_REQUEST,
+  [FailureKind.CONFLICT]: HttpStatus.CONFLICT,
   [FailureKind.NOT_FOUND]: HttpStatus.NOT_FOUND,
   [FailureKind.BUSINESS]: HttpStatus.UNPROCESSABLE_ENTITY,
+  [FailureKind.TRANSIENT]: HttpStatus.SERVICE_UNAVAILABLE,
   [FailureKind.INTERNAL]: HttpStatus.INTERNAL_SERVER_ERROR,
 };
+
+const RETRY_AFTER_SECONDS = '1';
 
 const INTERNAL_MESSAGE = 'erro interno';
 
@@ -32,11 +37,11 @@ export class HttpErrorFilter implements ExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const body = this.toBody(exception);
-    host
-      .switchToHttp()
-      .getResponse<Response>()
-      .status(body.statusCode)
-      .json(body);
+    const response = host.switchToHttp().getResponse<Response>();
+    if (failureKindOf(body.failureCode) === FailureKind.TRANSIENT) {
+      response.setHeader('Retry-After', RETRY_AFTER_SECONDS);
+    }
+    response.status(body.statusCode).json(body);
   }
 
   private toBody(exception: unknown): HttpErrorResponseDto {

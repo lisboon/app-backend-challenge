@@ -9,7 +9,9 @@
   },
   "overrides": [
     {
-      "files": ["src/modules/**/domain/**/*.ts"],
+      "files": [
+        "src/modules/**/domain/**/*.ts"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -25,7 +27,8 @@
                   "**/infra/**",
                   "**/gateway/**",
                   "**/repository/**",
-                  "**/usecase/**"
+                  "**/usecase/**",
+                  "**/factory/**"
                 ],
                 "message": "O domínio é TypeScript puro: framework, ORM e adaptadores entram por portas."
               }
@@ -35,7 +38,9 @@
       }
     },
     {
-      "files": ["src/modules/**/usecase/**/*.ts"],
+      "files": [
+        "src/modules/**/usecase/**/*.ts"
+      ],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -49,7 +54,8 @@
                   "class-validator",
                   "class-transformer",
                   "**/infra/**",
-                  "**/repository/**"
+                  "**/repository/**",
+                  "**/factory/**"
                 ],
                 "message": "Use case depende do domínio e de portas (gateway/). Framework, persistência e transporte ficam na borda."
               }

@@ -1,10 +1,13 @@
 import { Global, Inject, Module, OnApplicationShutdown } from '@nestjs/common';
-import { defineConfig, MikroORM } from '@mikro-orm/postgresql';
+import { MikroORM } from '@mikro-orm/postgresql';
 
+import type { TransactionManager } from '../../modules/@shared/domain/transaction/transaction-manager';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
+import { MikroOrmTransactionManager } from './mikro-orm-transaction-manager';
+import { ormConfig } from './orm.config';
 
-const CONNECTION_TIMEOUT_MS = 1000;
+export const TRANSACTION_MANAGER = Symbol('TRANSACTION_MANAGER');
 
 @Global()
 @Module({
@@ -13,17 +16,16 @@ const CONNECTION_TIMEOUT_MS = 1000;
       provide: MikroORM,
       inject: [APP_CONFIG],
       useFactory: (config: AppConfig): Promise<MikroORM> =>
-        MikroORM.init(
-          defineConfig({
-            clientUrl: config.databaseUrl,
-            entities: [],
-            discovery: { warnWhenNoEntities: false },
-            driverOptions: { connectionTimeoutMillis: CONNECTION_TIMEOUT_MS },
-          }),
-        ),
+        MikroORM.init(ormConfig(config.databaseUrl)),
+    },
+    {
+      provide: TRANSACTION_MANAGER,
+      inject: [MikroORM],
+      useFactory: (orm: MikroORM): TransactionManager =>
+        new MikroOrmTransactionManager(orm),
     },
   ],
-  exports: [MikroORM],
+  exports: [MikroORM, TRANSACTION_MANAGER],
 })
 export class DatabaseModule implements OnApplicationShutdown {
   constructor(@Inject(MikroORM) private readonly orm: MikroORM) {}
