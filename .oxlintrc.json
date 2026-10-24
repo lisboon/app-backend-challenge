@@ -6,5 +6,57 @@
   },
   "env": {
     "node": true
-  }
+  },
+  "overrides": [
+    {
+      "files": ["src/modules/**/domain/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@nestjs/*",
+                  "@mikro-orm/*",
+                  "@aws-sdk/*",
+                  "class-validator",
+                  "class-transformer",
+                  "**/infra/**",
+                  "**/gateway/**",
+                  "**/repository/**",
+                  "**/usecase/**"
+                ],
+                "message": "O domínio é TypeScript puro: framework, ORM e adaptadores entram por portas."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/modules/**/usecase/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@nestjs/*",
+                  "@mikro-orm/*",
+                  "@aws-sdk/*",
+                  "class-validator",
+                  "class-transformer",
+                  "**/infra/**",
+                  "**/repository/**"
+                ],
+                "message": "Use case depende do domínio e de portas (gateway/). Framework, persistência e transporte ficam na borda."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }
