@@ -6,7 +6,9 @@ import {
   TransactionContext,
   type TransactionManager,
 } from '../../modules/@shared/domain/transaction/transaction-manager';
-import { isConnectionFailure } from './database-errors';
+import { isTransientFailure } from './database-errors';
+
+const LOCK_TIMEOUT = "set local lock_timeout = '2s'";
 
 export class MikroOrmTransactionContext extends TransactionContext {
   constructor(readonly em: EntityManager) {
@@ -40,14 +42,12 @@ export class MikroOrmTransactionManager implements TransactionManager {
     options: TransactionOptions,
   ): Promise<T> {
     try {
-      return await this.orm.em
-        .fork()
-        .transactional(
-          (em) => work(new MikroOrmTransactionContext(em)),
-          options,
-        );
+      return await this.orm.em.fork().transactional(async (em) => {
+        await em.execute(LOCK_TIMEOUT);
+        return work(new MikroOrmTransactionContext(em));
+      }, options);
     } catch (error) {
-      if (isConnectionFailure(error)) {
+      if (isTransientFailure(error)) {
         throw new InfrastructureUnavailableError('PostgreSQL');
       }
       throw error;

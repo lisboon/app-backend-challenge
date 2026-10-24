@@ -1,4 +1,4 @@
-const CONNECTION_CODES = new Set([
+const TRANSIENT_CODES = new Set([
   'ECONNREFUSED',
   'ECONNRESET',
   'ETIMEDOUT',
@@ -13,6 +13,9 @@ const CONNECTION_CODES = new Set([
   '57P01',
   '57P02',
   '57P03',
+  '55P03',
+  '40001',
+  '40P01',
 ]);
 
 const CONNECTION_MESSAGES = [
@@ -43,10 +46,10 @@ export function isUniqueViolation(error: unknown, constraint: string): boolean {
   );
 }
 
-export function isConnectionFailure(error: unknown): boolean {
+export function isTransientFailure(error: unknown): boolean {
   return layers(error).some(
     (layer) =>
-      (typeof layer.code === 'string' && CONNECTION_CODES.has(layer.code)) ||
+      (typeof layer.code === 'string' && TRANSIENT_CODES.has(layer.code)) ||
       (typeof layer.message === 'string' &&
         CONNECTION_MESSAGES.some((pattern) =>
           pattern.test(layer.message as string),
