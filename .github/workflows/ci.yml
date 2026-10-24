@@ -18,3 +18,18 @@ jobs:
       - run: bun run build
       - run: bun run test
       - run: bun run test:e2e
+
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run infra:test:up
+      - run: bun run test:integration
+      - run: docker compose up -d --wait --build
+      - run: curl -fsS http://127.0.0.1:3000/health/ready
+      - if: always()
+        run: docker compose --profile test down -v
