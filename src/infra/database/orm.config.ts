@@ -1,5 +1,5 @@
 import { Migrator } from '@mikro-orm/migrations';
-import { defineConfig } from '@mikro-orm/postgresql';
+import { defineConfig, type Options } from '@mikro-orm/postgresql';
 
 import { WagerTransactionModel } from '../../modules/wagering/repository/wager-transaction.model';
 import { LedgerEntryModel } from '../../modules/wallet/repository/ledger-entry.model';
@@ -8,7 +8,7 @@ import { MIGRATIONS } from './migrations';
 
 const CONNECTION_TIMEOUT_MS = 1000;
 
-export function ormConfig(clientUrl: string) {
+export function ormConfig(clientUrl: string): Options {
   return defineConfig({
     clientUrl,
     entities: [WalletModel, LedgerEntryModel, WagerTransactionModel],

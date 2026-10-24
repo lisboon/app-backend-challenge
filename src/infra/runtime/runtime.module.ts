@@ -11,11 +11,13 @@ export const CLOCK = Symbol('CLOCK');
   providers: [
     {
       provide: ID_GENERATOR,
-      useValue: { next: () => Bun.randomUUIDv7() } satisfies IdGenerator,
+      useValue: {
+        next: (): string => Bun.randomUUIDv7(),
+      } satisfies IdGenerator,
     },
     {
       provide: CLOCK,
-      useValue: { now: () => new Date() } satisfies Clock,
+      useValue: { now: (): Date => new Date() } satisfies Clock,
     },
   ],
   exports: [ID_GENERATOR, CLOCK],

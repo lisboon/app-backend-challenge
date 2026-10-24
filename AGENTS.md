@@ -61,6 +61,17 @@ resultado do CI. Diga no PR o que não rodou localmente.
 
 ## Regras de código
 
+- Linha em branco depois do último import. Imports em dois blocos separados por
+  linha em branco: primeiro pacotes externos, depois caminhos relativos; dentro
+  de cada bloco, na ordem em que o resto do projeto já usa.
+- Linha em branco entre membros de classe (construtor, métodos).
+- `if` sempre com chaves, mesmo de uma linha.
+- Tipo de retorno explícito em toda função e método de `src/`.
+- Textos em português com acentuação correta em código, mensagens de erro, nomes
+  de teste e documentação. Só as mensagens de commit ficam sem acento.
+- Teste de uma classe existente entra no spec que já existe para ela.
+- Nome de caso de uso inclui o agregado: `CreateWalletUseCase`,
+  `FindWalletByIdUseCase`.
 - **Sem comentários.** Só quando o código não consegue dizer o porquê sozinho.
   Explicação de decisão vai para o `ARCHITECTURE.md`.
 - **Sem código morto.** Só existe o que algum código de produção usa. Teste não
@@ -115,6 +126,12 @@ Teto: verificação vermelha limita a 70; qualquer falha eliminatória do
 - Conventional commits em português, minúsculas, sem acento:
   `feat: abre e consulta wallets`. Corpo explica o porquê, não o como.
 - Commits atômicos. Cada um compila e passa em lint, build, unidade e e2e sozinho.
-- Nunca faça push no `main`, nunca faça merge e nunca reescreva histórico já
-  enviado. Abra o PR e pare: ele é revisado antes do merge.
+- Nunca faça push no `main` e nunca faça merge. Abra o PR e pare: ele é revisado
+  antes do merge.
+- Nunca reescreva o histórico do `main`. Numa branch de PR ainda não mergeada,
+  reescreva só quando a revisão pedir, com `git push --force-with-lease`.
+- Não deixe commit que só corrige outro commit do mesmo PR: incorpore a correção
+  no commit original.
+- Toda afirmação do PR sobre algo verificado precisa de um teste que falhe se
+  aquilo quebrar.
 - A descrição do PR segue `.github/pull_request_template.md`.

@@ -1,6 +1,9 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["unicorn", "typescript", "oxc", "import"],
   "rules": {
+    "curly": "error",
+    "import/newline-after-import": "error",
     "typescript/no-explicit-any": "off",
     "typescript/no-floating-promises": "error"
   },
@@ -8,6 +11,12 @@
     "node": true
   },
   "overrides": [
+    {
+      "files": ["src/**/*.ts"],
+      "rules": {
+        "typescript/explicit-function-return-type": "error"
+      }
+    },
     {
       "files": [
         "src/modules/**/domain/**/*.ts"
