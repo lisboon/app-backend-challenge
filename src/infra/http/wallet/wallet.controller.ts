@@ -13,6 +13,7 @@ import type { WalletUseCases } from '../../../modules/wallet/factory/wallet.fact
 import type { ListWalletLedgerUseCaseOutputDto } from '../../../modules/wallet/usecase/list-wallet-ledger/list-wallet-ledger.usecase.dto';
 import type { ReconcileWalletUseCaseOutputDto } from '../../../modules/wallet/usecase/reconcile-wallet/reconcile-wallet.usecase.dto';
 import type { WalletOutputDto } from '../../../modules/wallet/usecase/wallet.output.dto';
+import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';
 import {
   createWalletRequest,
@@ -66,10 +67,14 @@ export class WalletController {
   }
 
   @Post()
-  create(@Body() body: unknown): Promise<WalletOutputDto> {
-    return this.useCases.create.execute(
-      parseRequest(createWalletRequest, body),
-    );
+  create(
+    @Body() body: unknown,
+    @CorrelationId() correlationId: string,
+  ): Promise<WalletOutputDto> {
+    return this.useCases.create.execute({
+      ...parseRequest(createWalletRequest, body),
+      correlationId,
+    });
   }
 
   @Get(':walletId')

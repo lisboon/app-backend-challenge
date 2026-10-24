@@ -16,6 +16,7 @@ import { WagerTransactionStatus } from '../../../modules/wagering/domain/wager-t
 import type { WageringUseCases } from '../../../modules/wagering/factory/wagering.factory';
 import type { SubmitWagerTransactionUseCaseOutputDto } from '../../../modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase.dto';
 import type { WagerTransactionOutputDto } from '../../../modules/wagering/usecase/wager-transaction.output.dto';
+import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';
 import {
   idempotencyKey,
@@ -35,12 +36,14 @@ export class WageringController {
   @Post('wagering/transactions')
   async submit(
     @Headers('idempotency-key') key: string | undefined,
+    @CorrelationId() correlationId: string,
     @Body() body: unknown,
     @Res({ passthrough: true }) response: Response,
   ): Promise<SubmitWagerTransactionUseCaseOutputDto> {
     const result = await this.useCases.submit.execute({
       ...parseRequest(submitWagerTransactionRequest, body),
       idempotencyKey: idempotencyKeyFrom(key),
+      correlationId,
     });
     response.status(
       result.status === WagerTransactionStatus.Rejected

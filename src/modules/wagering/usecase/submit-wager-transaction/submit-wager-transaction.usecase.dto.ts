@@ -7,6 +7,7 @@ import type {
 } from '../../domain/wager-transaction.entity';
 
 export interface SubmitWagerTransactionUseCaseInputDto {
+  correlationId: string;
   idempotencyKey: string;
   providerId: string;
   externalTransactionId: string;

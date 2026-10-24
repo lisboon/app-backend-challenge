@@ -1,3 +1,4 @@
+import type { EventContext } from '../../@shared/domain/event/integration-event';
 import type { Money } from '../../@shared/domain/money';
 import type { TransactionContext } from '../../@shared/domain/transaction/transaction-manager';
 import type {
@@ -6,6 +7,7 @@ import type {
 } from '../domain/wager-transaction.entity';
 
 export interface WalletMovement {
+  eventContext: EventContext;
   transactionId: string;
   entryId: string;
   direction: MovementDirection;
@@ -13,9 +15,14 @@ export interface WalletMovement {
   at: Date;
 }
 
+export interface WalletMovementResult {
+  balance: Money;
+  recordBalanceChanged(): Promise<void>;
+}
+
 export interface LockedWallet extends TargetWallet {
   id: string;
-  apply(movement: WalletMovement): Promise<Money>;
+  apply(movement: WalletMovement): Promise<WalletMovementResult>;
 }
 
 export interface WalletMovementGateway {

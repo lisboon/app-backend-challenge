@@ -1,6 +1,7 @@
 import { Migrator } from '@mikro-orm/migrations';
 import { defineConfig, type Options } from '@mikro-orm/postgresql';
 
+import { OutboxMessageModel } from '../../modules/@shared/repository/outbox-message.model';
 import { WagerTransactionModel } from '../../modules/wagering/repository/wager-transaction.model';
 import { LedgerEntryModel } from '../../modules/wallet/repository/ledger-entry.model';
 import { WalletModel } from '../../modules/wallet/repository/wallet.model';
@@ -11,7 +12,12 @@ const CONNECTION_TIMEOUT_MS = 1000;
 export function ormConfig(clientUrl: string): Options {
   return defineConfig({
     clientUrl,
-    entities: [WalletModel, LedgerEntryModel, WagerTransactionModel],
+    entities: [
+      WalletModel,
+      LedgerEntryModel,
+      WagerTransactionModel,
+      OutboxMessageModel,
+    ],
     extensions: [Migrator],
     allowGlobalContext: false,
     driverOptions: { connectionTimeoutMillis: CONNECTION_TIMEOUT_MS },

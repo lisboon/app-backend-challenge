@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 
+import type { OutboxMessage } from '../../../src/modules/@shared/domain/outbox/outbox-message.entity';
+import type { OutboxGateway } from '../../../src/modules/@shared/gateway/outbox.gateway';
 import { WalletNotFoundError } from '../../../src/modules/@shared/domain/errors/wallet-not-found.error';
 import { FailureCode } from '../../../src/modules/@shared/domain/failure-code';
 import { Money } from '../../../src/modules/@shared/domain/money';
@@ -37,7 +39,9 @@ class FakeContext extends TransactionContext {
 
 class FakeWallets implements WalletMovementGateway {
   balance = brl('100.00');
+
   exists = true;
+
   readonly applied: WalletMovement[] = [];
 
   async lock(walletId: string): Promise<LockedWallet | null> {
@@ -55,7 +59,10 @@ class FakeWallets implements WalletMovementGateway {
           movement.direction === MovementDirection.Debit
             ? this.balance.subtract(movement.money)
             : this.balance.add(movement.money);
-        return this.balance;
+        return {
+          balance: this.balance,
+          recordBalanceChanged: async () => undefined,
+        };
       },
     };
   }
@@ -63,7 +70,9 @@ class FakeWallets implements WalletMovementGateway {
 
 class FakeWagers implements WagerTransactionGateway {
   readonly stored: WagerTransaction[] = [];
+
   readonly committedElsewhere: WagerTransaction[] = [];
+
   beforeCreate: (transaction: WagerTransaction) => void = () => undefined;
 
   async create(transaction: WagerTransaction): Promise<void> {
@@ -105,22 +114,33 @@ class FakeWagers implements WagerTransactionGateway {
   }
 }
 
+class FakeOutbox implements OutboxGateway {
+  readonly messages: OutboxMessage[] = [];
+
+  async create(message: OutboxMessage): Promise<void> {
+    this.messages.push(message);
+  }
+}
+
 class FakeTransactions implements TransactionManager {
   executions = 0;
 
   constructor(
     private readonly wallets: FakeWallets,
     private readonly wagers: FakeWagers,
+    private readonly outbox: FakeOutbox,
   ) {}
 
   async execute<T>(work: (trx: TransactionContext) => Promise<T>): Promise<T> {
     this.executions += 1;
     const balance = this.wallets.balance;
     const stored = [...this.wagers.stored];
+    const messages = [...this.outbox.messages];
     try {
       return await work(new FakeContext());
     } catch (error) {
       this.wallets.balance = balance;
+      this.outbox.messages.splice(0, this.outbox.messages.length, ...messages);
       this.wagers.stored.splice(0, this.wagers.stored.length, ...stored);
       throw error;
     }
@@ -134,6 +154,7 @@ class FakeTransactions implements TransactionManager {
 const input = (
   overrides: Partial<SubmitWagerTransactionUseCaseInputDto> = {},
 ): SubmitWagerTransactionUseCaseInputDto => ({
+  correlationId: 'correlation-1',
   idempotencyKey: 'provider-a:ext-1',
   providerId: 'provider-a',
   externalTransactionId: 'ext-1',
@@ -147,6 +168,7 @@ const input = (
 });
 
 describe('SubmitWagerTransactionUseCase', () => {
+  let outbox: FakeOutbox;
   let wallets: FakeWallets;
   let wagers: FakeWagers;
   let transactions: FakeTransactions;
@@ -155,7 +177,8 @@ describe('SubmitWagerTransactionUseCase', () => {
   beforeEach(() => {
     wallets = new FakeWallets();
     wagers = new FakeWagers();
-    transactions = new FakeTransactions(wallets, wagers);
+    outbox = new FakeOutbox();
+    transactions = new FakeTransactions(wallets, wagers, outbox);
     let sequence = 0;
     useCase = new SubmitWagerTransactionUseCase(
       transactions,
@@ -163,6 +186,7 @@ describe('SubmitWagerTransactionUseCase', () => {
       wallets,
       { next: () => `id-${(sequence += 1)}` },
       { now: () => at },
+      outbox,
     );
   });
 
@@ -179,7 +203,13 @@ describe('SubmitWagerTransactionUseCase', () => {
     expect(wallets.applied).toEqual([
       {
         transactionId: 'id-1',
-        entryId: 'id-2',
+        entryId: 'id-4',
+        eventContext: {
+          eventId: 'id-3',
+          correlationId: 'correlation-1',
+          causationId: 'id-2',
+          occurredAt: at,
+        },
         direction: MovementDirection.Debit,
         money: brl('30.00'),
         at,
@@ -294,5 +324,49 @@ describe('SubmitWagerTransactionUseCase', () => {
     expect(
       await useCase.execute(input()).catch((error: unknown) => error),
     ).toBeInstanceOf(IdempotencyRaceError);
+  });
+
+  it.each([
+    ['BET', '30.00', 'WagerTransactionProcessed'],
+    ['LOSS', '0.00', 'WagerTransactionProcessed'],
+    ['BET', '101.00', 'WagerTransactionRejected'],
+  ] as const)(
+    'enfileira o evento de %s com valor %s',
+    async (kind, amount, eventType) => {
+      const output = await useCase.execute(
+        input({ kind, money: { amount, currency: 'BRL' } }),
+      );
+      expect(outbox.messages).toHaveLength(1);
+      expect(outbox.messages[0].payload).toMatchObject({
+        eventId: 'id-2',
+        aggregateId: 'wallet-1',
+        correlationId: 'correlation-1',
+        occurredAt: at.toISOString(),
+        version: 1,
+        eventType,
+        data: {
+          transactionId: output.transactionId,
+          kind,
+          status: output.status,
+          money: { amount, currency: 'BRL' },
+          balance: output.balance,
+        },
+      });
+      if (kind === 'LOSS' || eventType === 'WagerTransactionRejected') {
+        expect(wallets.applied).toHaveLength(0);
+      }
+      if (eventType === 'WagerTransactionRejected') {
+        expect(outbox.messages[0].payload.data).toMatchObject({
+          failureCode: FailureCode.INSUFFICIENT_BALANCE,
+        });
+      }
+    },
+  );
+
+  it('replay não enfileira mesmo com nova correlação', async () => {
+    await useCase.execute(input());
+    await useCase.execute(input({ correlationId: 'outra-correlação' }));
+    expect(outbox.messages).toHaveLength(1);
+    expect(outbox.messages[0].payload.correlationId).toBe('correlation-1');
   });
 });
