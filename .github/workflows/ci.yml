@@ -32,5 +32,6 @@ jobs:
       - run: bun run test:integration
       - run: docker compose up -d --wait --build
       - run: curl -fsS http://127.0.0.1:3000/health/ready
+      - run: curl -fsS http://127.0.0.1:3001/metrics
       - if: always()
         run: docker compose --profile test down -v

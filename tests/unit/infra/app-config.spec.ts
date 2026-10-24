@@ -11,6 +11,7 @@ const valid = {
   AWS_REGION: 'us-east-1',
   SQS_ENDPOINT: 'http://sqs:4566',
   WAGER_QUEUE_NAME: 'wager-transactions.fifo',
+  EVENTS_QUEUE_NAME: 'wallet-events.fifo',
 };
 
 const problemsOf = (env: Record<string, string | undefined>): string[] => {
@@ -29,11 +30,14 @@ describe('loadConfig', () => {
   it('lê a configuração completa', () => {
     expect(loadConfig(valid)).toEqual({
       port: 3000,
+      workerMetricsPort: 3001,
+      outboxPollIntervalMs: 500,
       databaseUrl: valid.DATABASE_URL,
       sqs: {
         region: 'us-east-1',
         endpoint: 'http://sqs:4566',
         wagerQueueName: 'wager-transactions.fifo',
+        eventsQueueName: 'wallet-events.fifo',
       },
     });
   });
@@ -53,6 +57,7 @@ describe('loadConfig', () => {
       'DATABASE_URL ausente',
       'AWS_REGION ausente',
       'WAGER_QUEUE_NAME ausente',
+      'EVENTS_QUEUE_NAME ausente',
     ]);
   });
 
@@ -73,4 +78,41 @@ describe('loadConfig', () => {
     ]);
     expect(problems.join()).not.toContain('segredo');
   });
+
+  it('lê as configurações do worker', () => {
+    const config = loadConfig({
+      ...valid,
+      WORKER_METRICS_PORT: '4001',
+      OUTBOX_POLL_INTERVAL_MS: '250',
+    });
+    expect(config.workerMetricsPort).toBe(4001);
+    expect(config.outboxPollIntervalMs).toBe(250);
+  });
+
+  it.each(['0', '-1', '1.5', 'abc', '2147483648'])(
+    'recusa intervalo de polling %s',
+    (value) => {
+      expect(problemsOf({ ...valid, OUTBOX_POLL_INTERVAL_MS: value })).toEqual([
+        'OUTBOX_POLL_INTERVAL_MS deve ser inteiro entre 1 e 2147483647',
+      ]);
+    },
+  );
+
+  it.each(['-1', '1.5', 'abc', '65536'])(
+    'recusa porta do worker %s',
+    (value) => {
+      expect(problemsOf({ ...valid, WORKER_METRICS_PORT: value })).toEqual([
+        'WORKER_METRICS_PORT deve ser inteiro entre 0 e 65535',
+      ]);
+    },
+  );
+
+  it.each(['eventos', 'com espaço.fifo', 'a'.repeat(76) + '.fifo'])(
+    'recusa nome de fila de eventos %s',
+    (value) => {
+      expect(problemsOf({ ...valid, EVENTS_QUEUE_NAME: value })).toEqual([
+        'EVENTS_QUEUE_NAME deve ser nome de fila FIFO',
+      ]);
+    },
+  );
 });

@@ -8,6 +8,7 @@ import {
   migrateFresh,
   openTestOrm,
 } from '../support/database';
+import { retryTransient } from '../support/retry-transient';
 import { startApp } from '../support/http-app';
 import {
   type AppProcess,
@@ -93,6 +94,9 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       },
       body: JSON.stringify(body),
     });
+
+  const submitEventually = (body: unknown, key = uuid(), url = baseUrl) =>
+    retryTransient(() => submit(body, key, url));
 
   const balanceOf = async (walletId: string): Promise<string> => {
     const response = await fetch(`${baseUrl}/wallets/${walletId}`);
@@ -383,7 +387,7 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       const wallet = await open('100.00');
 
       const responses = await Promise.all(
-        Array.from({ length: 50 }, () => submit(wager(wallet))),
+        Array.from({ length: 50 }, () => submitEventually(wager(wallet))),
       );
       const statuses = responses.map((response) => response.status);
 
@@ -400,7 +404,7 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
 
       const results = (await Promise.all(
         Array.from({ length: 20 }, () =>
-          submit(body, key).then((response) => response.json()),
+          submitEventually(body, key).then((response) => response.json()),
         ),
       )) as Submitted[];
 
@@ -411,6 +415,7 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
         1,
       );
       expect(await balanceOf(wallet.walletId)).toBe('90.00');
+      await invariant(wallet.walletId);
     });
 
     it('a mesma chave disputada por duas wallets resolve em uma transação e um conflito', async () => {
@@ -420,8 +425,8 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       const externalTransactionId = uuid();
 
       const responses = await Promise.all([
-        submit(wager(a, { externalTransactionId }), key),
-        submit(wager(b, { externalTransactionId }), key),
+        submitEventually(wager(a, { externalTransactionId }), key),
+        submitEventually(wager(b, { externalTransactionId }), key),
       ]);
 
       expect(
@@ -430,6 +435,8 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       expect(
         [await balanceOf(a.walletId), await balanceOf(b.walletId)].sort(),
       ).toEqual(['100.00', '90.00']);
+      await invariant(a.walletId);
+      await invariant(b.walletId);
     });
 
     it('10 wallets em paralelo não se bloqueiam nem se misturam', async () => {
@@ -440,7 +447,7 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       await Promise.all(
         wallets.flatMap((wallet) =>
           Array.from({ length: 5 }, () =>
-            submit(wager(wallet, { money: brl('3.00') })),
+            submitEventually(wager(wallet, { money: brl('3.00') })),
           ),
         ),
       );
@@ -510,13 +517,16 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
 
       const responses = await Promise.all(
         Array.from({ length: 30 }, (_, i) =>
-          submit(wager(wallet), uuid(), urls[i % urls.length]),
+          submitEventually(wager(wallet), uuid(), urls[i % urls.length]),
         ),
       );
 
       expect(
         responses.filter((response) => response.status === 201),
       ).toHaveLength(10);
+      expect(
+        responses.filter((response) => response.status === 422),
+      ).toHaveLength(20);
       expect(await balanceOf(wallet.walletId)).toBe('0.00');
       await invariant(wallet.walletId);
     });
@@ -529,7 +539,9 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       const results = (await Promise.all(
         urls.flatMap((url) =>
           Array.from({ length: 5 }, () =>
-            submit(body, key, url).then((response) => response.json()),
+            submitEventually(body, key, url).then((response) =>
+              response.json(),
+            ),
           ),
         ),
       )) as Submitted[];
@@ -538,6 +550,7 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
         1,
       );
       expect(await balanceOf(wallet.walletId)).toBe('90.00');
+      await invariant(wallet.walletId);
     });
   });
 

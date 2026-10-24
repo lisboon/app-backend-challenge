@@ -33,11 +33,13 @@ export class ReadinessService {
         this.orm.em.getConnection().execute('select 1'),
       ),
       this.probe('sqs', (abortSignal) =>
-        this.sqs.send(
-          new GetQueueUrlCommand({
-            QueueName: this.config.sqs.wagerQueueName,
-          }),
-          { abortSignal },
+        Promise.all(
+          [this.config.sqs.wagerQueueName, this.config.sqs.eventsQueueName].map(
+            (QueueName) =>
+              this.sqs.send(new GetQueueUrlCommand({ QueueName }), {
+                abortSignal,
+              }),
+          ),
         ),
       ),
     ]);
@@ -71,6 +73,7 @@ function failureReason(error: unknown): string {
   if (!(error instanceof Error)) {
     return typeof error;
   }
+
   const code = (error as { code?: unknown }).code;
   return typeof code === 'string'
     ? `${error.name} ${code}`

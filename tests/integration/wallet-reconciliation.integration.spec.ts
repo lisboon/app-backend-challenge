@@ -198,14 +198,17 @@ describe('reconciliação com infraestrutura real', () => {
     await invariant(id);
   });
 
-  it('expõe só o contador de divergências em um registro por aplicação', async () => {
-    const samples = (await metric())
-      .split('\n')
-      .filter((line) => line && !line.startsWith('#'));
-    expect(samples).toHaveLength(1);
-    expect(samples[0]).toMatch(
-      /^wallet_reconciliation_divergences_total [1-9]\d*$/,
-    );
+  it('expõe somente as métricas da wallet e da outbox em um registro por aplicação', async () => {
+    const families = [...(await metric()).matchAll(/# TYPE (\w+)/g)]
+      .map((match) => match[1])
+      .sort();
+    expect(families).toEqual([
+      'outbox_lag_seconds',
+      'outbox_publish_failures_total',
+      'outbox_publish_retries_total',
+      'outbox_published_total',
+      'wallet_reconciliation_divergences_total',
+    ]);
     const other = await startApp();
     try {
       const response = await fetch(other.baseUrl + '/metrics');

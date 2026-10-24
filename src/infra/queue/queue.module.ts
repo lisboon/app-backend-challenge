@@ -14,6 +14,9 @@ import { APP_CONFIG } from '../config/config.module';
         new SQSClient({
           region: config.sqs.region,
           endpoint: config.sqs.endpoint,
+          useQueueUrlAsEndpoint: false,
+          maxAttempts: 1,
+          requestHandler: { connectionTimeout: 1000, requestTimeout: 5000 },
         }),
     },
   ],

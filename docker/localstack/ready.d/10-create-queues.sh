@@ -19,3 +19,7 @@ awslocal sqs create-queue \
     \"VisibilityTimeout\": \"30\",
     \"RedrivePolicy\": \"{\\\"deadLetterTargetArn\\\":\\\"$dlq_arn\\\",\\\"maxReceiveCount\\\":\\\"5\\\"}\"
   }" >/dev/null
+
+awslocal sqs create-queue \
+  --queue-name "${EVENTS_QUEUE_NAME:-wallet-events.fifo}" \
+  --attributes FifoQueue=true,ContentBasedDeduplication=false >/dev/null
