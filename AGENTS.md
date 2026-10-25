@@ -33,19 +33,61 @@ docker compose up -d --wait --build && curl -fsS http://127.0.0.1:3000/health/re
 Se o ambiente não tiver Docker, rode o que for possível, envie a branch e use o
 resultado do CI. Diga no PR o que não rodou localmente.
 
-## Arquitetura
+## Mapa do repositório
 
-- Contextos em `src/modules/<contexto>/` com `domain/`, `usecase/`, `gateway/`,
-  `repository/`, `factory/` e `event/`. Borda em `src/infra/`. Pasta só nasce
-  com arquivo.
-- O lint (`.oxlintrc.json`) impõe as fronteiras: `domain/` é TypeScript puro;
-  `usecase/` não importa framework, ORM nem adaptador; `domain/`, `usecase/` e
-  `gateway/` não importam outro contexto. Contextos conversam por uma porta
-  declarada por quem consome, ligada na `factory/`.
-- Casos de uso são montados pela factory do contexto e expostos ao Nest por
-  `useFactory`. Nunca use `@Injectable` em `usecase/`.
-- Todo acesso ao banco passa pelo `TransactionManager`. Gateways recebem o
-  contexto da transação como parâmetro obrigatório.
+Todo arquivo novo cabe numa linha desta tabela. Antes de criar um, abra o
+arquivo de referência da linha e copie a forma: imports, ordem dos membros,
+nome da classe e do teste. Um arquivo que não cabe em nenhuma linha exige
+atualizar esta tabela **no mesmo PR**, com o motivo na descrição. Sem isso, o
+PR não é aprovado.
+
+| O quê | Onde e nome | Exporta | Referência |
+|---|---|---|---|
+| Agregado ou entidade | `src/modules/<ctx>/domain/<nome>.entity.ts` | classe `<Nome>`, construtor privado, `create`/`open`/`rehydrate` | `wallet/domain/wallet.entity.ts` |
+| Objeto de domínio sem identidade | `src/modules/<ctx>/domain/<nome>.ts` | classe ou função pura | `wallet/domain/wallet-reconciliation.ts` |
+| Erros de um contexto | `src/modules/<ctx>/domain/errors/<ctx>.errors.ts` | um `DomainError` por condição | `wagering/domain/errors/wagering.errors.ts` |
+| Erro compartilhado | `src/modules/@shared/domain/errors/<nome>.error.ts`, ou `<tema>.errors.ts` se forem vários | idem | `@shared/domain/errors/wallet-not-found.error.ts` |
+| Evento de integração | `src/modules/<ctx>/event/<nome-do-evento>.event.ts` | classe com o nome do `eventType`, `static from(...)` | `wallet/event/wallet-balance-changed.event.ts` |
+| Dados comuns a vários eventos | `src/modules/<ctx>/event/<nome>-event.data.ts` | interface + função que monta | `wagering/event/wager-transaction-event.data.ts` |
+| Porta (gateway) | `src/modules/<ctx>/gateway/<nome>.gateway.ts` | `interface <Nome>Gateway`, transação como último parâmetro | `wallet/gateway/wallet.gateway.ts` |
+| Porta de observação | `src/modules/<ctx>/gateway/<nome>-monitor.gateway.ts` | `interface <Nome>Monitor` | `wallet/gateway/reconciliation-monitor.gateway.ts` |
+| Adaptador de banco | `src/modules/<ctx>/repository/<nome>.repository.ts`, `<nome>.model.ts`, `<nome>.model.mapper.ts`, **o mesmo `<nome>` da entidade** | `<Nome>Repository`, `<Nome>Model`, `<Nome>ModelMapper` | `wallet/repository/wallet.*.ts` |
+| Adaptador de outra tecnologia (SQS, métrica) | `src/infra/<tecnologia>/<nome>.ts` | classe que implementa a porta | `infra/observability/reconciliation-monitor.ts` |
+| Caso de uso | `src/modules/<ctx>/usecase/<ação>/<ação>.usecase.ts` e `.usecase.dto.ts` | `<Ação>UseCase`, `<Ação>UseCaseInputDto`, `<Ação>UseCaseOutputDto`, `<Ação>UseCaseInterface` | `wallet/usecase/create-wallet/` |
+| Saída compartilhada entre casos de uso | `src/modules/<ctx>/usecase/<nome>.output.dto.ts` | interface + função `to<Nome>Output` | `wallet/usecase/wallet.output.dto.ts` |
+| Colaborador usado por mais de um caso de uso | `src/modules/<ctx>/usecase/<nome>.ts` | uma classe com um propósito, sem framework | (criada no passo 2) |
+| Contrato de entrada usado por mais de um canal (HTTP e fila) | `src/infra/contract/<nome>.contract.ts` | schemas zod estritos | (criado no passo 3) |
+| Documento além de README e ARCHITECTURE | `docs/<nome>.md` | — | (criado no passo 4) |
+| Montagem do contexto | `src/modules/<ctx>/factory/<ctx>.factory.ts` | `const <Ctx>Factory = { create(...) }` | `wallet/factory/wallet.factory.ts` |
+| Rota HTTP | `src/infra/http/<ctx>/<ctx>.controller.ts`, `.module.ts`, `.request.ts` | controller sem regra, só `parseRequest` e caso de uso | `infra/http/wallet/` |
+| Ciclo de worker | `src/infra/worker/<nome>-worker.ts` | `@Injectable` com `OnModuleInit`/`OnModuleDestroy` | `infra/worker/outbox-worker.ts` |
+| Migration | `src/infra/database/migrations/Migration<AAAAMMDD><NNNNNN><Nome>.ts`, listada em `index.ts` | `up` e `down` | `Migration20261024000002WagerSubmit.ts` |
+| Verificação automatizada | `scripts/<nome>.ts`; configuração ESM em `scripts/package.json` | script executável em Bun | `scripts/check-imports.ts` |
+| Teste | `tests/unit/<ctx>/<arquivo>.spec.ts`, `tests/integration/<área>.integration.spec.ts`, `tests/e2e/<área>.e2e.spec.ts`; apoio em `tests/support/` | — | `tests/unit/wallet/wallet.entity.spec.ts` |
+
+Regras que acompanham o mapa:
+
+- `domain/` não traduz erro técnico (código de driver, de rede ou do SDK). Quem
+  traduz é o adaptador, que entrega um erro de domínio ou um `Error` com `code`
+  normalizado.
+- Uma classe ou interface nova segue o nome da linha do mapa. Não invente
+  sufixo (`Service`, `Manager`, `Helper`, `Utils`, `Handler`) que o mapa não
+  tem.
+- Antes de criar, procure: se já existe arquivo que faz aquilo, estenda-o.
+  Não crie uma segunda versão.
+
+## Imports
+
+Verificado por `bun run lint` (oxlint e `scripts/check-imports.ts`):
+
+- primeiro os pacotes externos, depois uma linha em branco, depois os caminhos
+  relativos;
+- os relativos em ordem lexical da string do caminho. Por isso `../../../x` vem
+  antes de `../../x`, que vem antes de `./x`, e `./wallet.model` vem antes de
+  `./wallet.model.mapper`;
+- import novo entra na posição da ordem, nunca no topo nem no fim do bloco;
+- linha em branco depois do último import, exigida pelo oxlint
+  (`import/newline-after-import`).
 
 ## Nomes
 
@@ -61,9 +103,6 @@ resultado do CI. Diga no PR o que não rodou localmente.
 
 ## Regras de código
 
-- Linha em branco depois do último import. Imports em dois blocos separados por
-  linha em branco: primeiro pacotes externos, depois caminhos relativos; dentro
-  de cada bloco, na ordem em que o resto do projeto já usa.
 - Linha em branco entre membros de classe (construtor, métodos).
 - `if` sempre com chaves, mesmo de uma linha.
 - Tipo de retorno explícito em toda função e método de `src/`.
