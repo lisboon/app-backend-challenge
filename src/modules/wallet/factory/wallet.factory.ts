@@ -7,10 +7,10 @@ import { WagerTransactionRepository } from '../../wagering/repository/wager-tran
 import type { ReconciliationMonitor } from '../gateway/reconciliation-monitor.gateway';
 import { LedgerRepository } from '../repository/ledger.repository';
 import { WalletRepository } from '../repository/wallet.repository';
-import { CreateWalletUseCase } from '../usecase/create-wallet/create-wallet.usecase';
+import { CreateWalletUseCase } from '../usecase/create/create.usecase';
 import { FindWalletByIdUseCase } from '../usecase/find-by-id/find-by-id.usecase';
-import { ListWalletLedgerUseCase } from '../usecase/list-wallet-ledger/list-wallet-ledger.usecase';
-import { ReconcileWalletUseCase } from '../usecase/reconcile-wallet/reconcile-wallet.usecase';
+import { ListWalletLedgerUseCase } from '../usecase/list-ledger/list-ledger.usecase';
+import { ReconcileWalletUseCase } from '../usecase/reconcile/reconcile.usecase';
 
 export interface WalletFactoryDependencies {
   monitor: ReconciliationMonitor;

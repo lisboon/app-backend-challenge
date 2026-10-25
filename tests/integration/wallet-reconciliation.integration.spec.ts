@@ -9,7 +9,7 @@ import {
 } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
 import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
-import { ReconcileWalletUseCase } from '../../src/modules/wallet/usecase/reconcile-wallet/reconcile-wallet.usecase';
+import { ReconcileWalletUseCase } from '../../src/modules/wallet/usecase/reconcile/reconcile.usecase';
 import {
   openTestOrm,
   migrateFresh,

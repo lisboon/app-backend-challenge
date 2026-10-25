@@ -20,7 +20,7 @@ import { PrometheusPendingReferenceMonitor } from '../../src/infra/observability
 import type { TransactionManager } from '../../src/modules/@shared/domain/transaction/transaction-manager';
 import { WageringFactory } from '../../src/modules/wagering/factory/wagering.factory';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
-import type { SubmitWagerTransactionUseCaseInputDto } from '../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase.dto';
+import type { SubmitWagerTransactionUseCaseInputDto } from '../../src/modules/wagering/usecase/submit/submit.usecase.dto';
 import { deferred, eventually } from '../support/async';
 import {
   ledgerMatchesBalance,

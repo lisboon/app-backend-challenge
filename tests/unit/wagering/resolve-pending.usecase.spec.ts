@@ -11,7 +11,7 @@ import { WagerTransaction } from '../../../src/modules/wagering/domain/wager-tra
 import type { PendingReferenceMonitor } from '../../../src/modules/wagering/gateway/pending-reference-monitor.gateway';
 import type { WagerTransactionGateway } from '../../../src/modules/wagering/gateway/wager-transaction.gateway';
 import type { WalletMovementGateway } from '../../../src/modules/wagering/gateway/wallet-movement.gateway';
-import { ResolvePendingWagerTransactionsUseCase } from '../../../src/modules/wagering/usecase/resolve-pending-wager-transactions/resolve-pending-wager-transactions.usecase';
+import { ResolvePendingWagerTransactionsUseCase } from '../../../src/modules/wagering/usecase/resolve-pending/resolve-pending.usecase';
 import { WagerTransactionSettlement } from '../../../src/modules/wagering/usecase/wager-transaction-settlement';
 
 class FakeContext extends TransactionContext {

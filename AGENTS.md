@@ -53,7 +53,7 @@ PR não é aprovado.
 | Porta de observação | `src/modules/<ctx>/gateway/<nome>-monitor.gateway.ts` | `interface <Nome>Monitor` | `wallet/gateway/reconciliation-monitor.gateway.ts` |
 | Adaptador de banco | `src/modules/<ctx>/repository/<nome>.repository.ts`, `<nome>.model.ts`, `<nome>.model.mapper.ts`, **o mesmo `<nome>` da entidade** | `<Nome>Repository`, `<Nome>Model`, `<Nome>ModelMapper` | `wallet/repository/wallet.*.ts` |
 | Adaptador de outra tecnologia (SQS, métrica) | `src/infra/<tecnologia>/<nome>.ts` | classe que implementa a porta | `infra/observability/reconciliation-monitor.ts` |
-| Caso de uso | `src/modules/<ctx>/usecase/<ação>/<ação>.usecase.ts` e `.usecase.dto.ts` | `<Ação>UseCase`, `<Ação>UseCaseInputDto`, `<Ação>UseCaseOutputDto`, `<Ação>UseCaseInterface` | `wallet/usecase/create-wallet/` |
+| Caso de uso | `src/modules/<ctx>/usecase/<ação>/<ação>.usecase.ts` e `.usecase.dto.ts`. A pasta é **só a ação** (`create`, `find-by-id`, `submit`, `reconcile`, `resolve-pending`), com qualificador apenas quando a ação sozinha for ambígua dentro do módulo (`list-ledger`). O módulo já está no caminho; não o repita | a classe **inclui o agregado**, porque é nome global: `<Ação><Agregado>UseCase` (`FindWalletByIdUseCase`), com DTOs e interface no mesmo prefixo | `wallet/usecase/find-by-id/` |
 | Saída compartilhada entre casos de uso | `src/modules/<ctx>/usecase/<nome>.output.dto.ts` | interface + função `to<Nome>Output` | `wallet/usecase/wallet.output.dto.ts` |
 | Colaborador usado por mais de um caso de uso | `src/modules/<ctx>/usecase/<nome>.ts` | uma classe com um propósito, sem framework | (criada no passo 2) |
 | Contrato de entrada usado por mais de um canal (HTTP e fila) | `src/infra/contract/<nome>.contract.ts` | schemas zod estritos | (criado no passo 3) |
@@ -91,9 +91,11 @@ Verificado por `bun run lint` (oxlint e `scripts/check-imports.ts`):
 
 ## Nomes
 
-- Caso de uso: `usecase/<ação>/<ação>.usecase.ts` e `<ação>.usecase.dto.ts`,
-  com `{Ação}UseCaseInputDto`, `{Ação}UseCaseOutputDto` e
-  `{Ação}UseCaseInterface`.
+- Caso de uso: `usecase/<ação>/<ação>.usecase.ts` e `<ação>.usecase.dto.ts`, com a
+  pasta só com a ação (`submit`, `find-by-id`) e a classe com o agregado:
+  `{Ação}{Agregado}UseCase`, `{Ação}{Agregado}UseCaseInputDto`,
+  `{Ação}{Agregado}UseCaseOutputDto` e `{Ação}{Agregado}UseCaseInterface`
+  (`SubmitWagerTransactionUseCase`). Teste de unidade: `<ação>.usecase.spec.ts`.
 - Gateway: `<nome>.gateway.ts`, com métodos `create`, `update`, `findById` e a
   transação como último parâmetro.
 - Repositório: `<nome>.repository.ts`, `<nome>.model.ts` (`defineEntity`) e
@@ -109,8 +111,8 @@ Verificado por `bun run lint` (oxlint e `scripts/check-imports.ts`):
 - Textos em português com acentuação correta em código, mensagens de erro, nomes
   de teste e documentação. Só as mensagens de commit ficam sem acento.
 - Teste de uma classe existente entra no spec que já existe para ela.
-- Nome de caso de uso inclui o agregado: `CreateWalletUseCase`,
-  `FindWalletByIdUseCase`.
+- Nome de classe de caso de uso inclui o agregado (`CreateWalletUseCase`,
+  `FindWalletByIdUseCase`); a pasta não (`wallet/usecase/create/`).
 - **Sem comentários.** Só quando o código não consegue dizer o porquê sozinho.
   Explicação de decisão vai para o `ARCHITECTURE.md`.
 - **Sem código morto.** Só existe o que algum código de produção usa. Teste não

@@ -2,7 +2,7 @@ import { beforeAll, afterAll, describe, it, expect } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
-import type { ListWalletLedgerUseCaseOutputDto } from '../../src/modules/wallet/usecase/list-wallet-ledger/list-wallet-ledger.usecase.dto';
+import type { ListWalletLedgerUseCaseOutputDto } from '../../src/modules/wallet/usecase/list-ledger/list-ledger.usecase.dto';
 import {
   openTestOrm,
   migrateFresh,

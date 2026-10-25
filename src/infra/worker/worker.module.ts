@@ -9,7 +9,7 @@ import type { OutboxMonitor } from '../../modules/@shared/gateway/outbox-monitor
 import type { PublishOutboxUseCase } from '../../modules/@shared/usecase/publish-outbox/publish-outbox.usecase';
 import { WageringFactory } from '../../modules/wagering/factory/wagering.factory';
 import type { PendingReferenceMonitor } from '../../modules/wagering/gateway/pending-reference-monitor.gateway';
-import type { ResolvePendingWagerTransactionsUseCase } from '../../modules/wagering/usecase/resolve-pending-wager-transactions/resolve-pending-wager-transactions.usecase';
+import type { ResolvePendingWagerTransactionsUseCase } from '../../modules/wagering/usecase/resolve-pending/resolve-pending.usecase';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG, ConfigModule } from '../config/config.module';
 import {

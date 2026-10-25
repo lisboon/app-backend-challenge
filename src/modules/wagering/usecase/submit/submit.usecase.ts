@@ -16,7 +16,7 @@ import type {
   SubmitWagerTransactionUseCaseInputDto,
   SubmitWagerTransactionUseCaseInterface,
   SubmitWagerTransactionUseCaseOutputDto,
-} from './submit-wager-transaction.usecase.dto';
+} from './submit.usecase.dto';
 
 export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseCaseInterface {
   constructor(
