@@ -63,7 +63,7 @@ export class WagerTransactionSettlement {
           trx,
         );
       } else if (transaction.status === WagerTransactionStatus.Pending) {
-        transaction.markPendingReference(at);
+        transaction.markPendingReference(at, this.ttlSeconds);
         await this.outbox.create(
           OutboxMessage.enqueue(
             WagerTransactionPendingReference.from(
@@ -74,7 +74,10 @@ export class WagerTransactionSettlement {
           trx,
         );
       } else {
-        transaction.scheduleReferenceRetry(at);
+        transaction.scheduleReferenceRetry(
+          at,
+          reference ? undefined : this.ttlSeconds,
+        );
       }
       return;
     }

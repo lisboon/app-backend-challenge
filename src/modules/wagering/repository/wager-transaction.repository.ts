@@ -7,7 +7,10 @@ import {
   ReferenceAlreadyReversedError,
 } from '../domain/errors/wagering.errors';
 import type { WagerTransaction } from '../domain/wager-transaction.entity';
-import type { WagerTransactionGateway } from '../gateway/wager-transaction.gateway';
+import type {
+  PendingWagerTransaction,
+  WagerTransactionGateway,
+} from '../gateway/wager-transaction.gateway';
 import { WagerTransactionModel } from './wager-transaction.model';
 import {
   WagerTransactionModelMapper,
@@ -63,9 +66,9 @@ export class WagerTransactionRepository implements WagerTransactionGateway {
     now: Date,
     limit: number,
     trx: TransactionContext,
-  ): Promise<{ id: string; walletId: string }[]> {
+  ): Promise<PendingWagerTransaction[]> {
     return entityManagerOf(trx).execute(
-      'select id, wallet_id as "walletId" from wager_transactions where status=\'PENDING_REFERENCE\' and next_reference_attempt_at<=? order by next_reference_attempt_at,id limit ?',
+      'select id, wallet_id as "walletId", provider_id as "providerId", correlation_id as "correlationId" from wager_transactions where status=\'PENDING_REFERENCE\' and next_reference_attempt_at<=? order by next_reference_attempt_at,id limit ?',
       [now, limit],
     );
   }

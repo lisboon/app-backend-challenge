@@ -1,6 +1,11 @@
 import type { TransactionContext } from '../../@shared/domain/transaction/transaction-manager';
 import type { WagerTransaction } from '../domain/wager-transaction.entity';
 
+export type PendingWagerTransaction = Pick<
+  WagerTransaction,
+  'id' | 'walletId' | 'providerId' | 'correlationId'
+>;
+
 export interface WagerTransactionGateway {
   create(transaction: WagerTransaction, trx: TransactionContext): Promise<void>;
   update(transaction: WagerTransaction, trx: TransactionContext): Promise<void>;
@@ -8,7 +13,7 @@ export interface WagerTransactionGateway {
     now: Date,
     limit: number,
     trx: TransactionContext,
-  ): Promise<{ id: string; walletId: string }[]>;
+  ): Promise<PendingWagerTransaction[]>;
   lockPendingReference(
     id: string,
     trx: TransactionContext,

@@ -72,12 +72,22 @@ class FakeWallets implements WalletMovementGateway {
 class FakeWagers implements WagerTransactionGateway {
   async update(): Promise<void> {}
 
-  async findDueReferences(
-    now: Date,
-  ): Promise<{ id: string; walletId: string }[]> {
+  async findDueReferences(now: Date): Promise<
+    {
+      id: string;
+      walletId: string;
+      providerId: string;
+      correlationId: string;
+    }[]
+  > {
     return this.all()
       .filter((t) => t.isReferenceDue(now))
-      .map((t) => ({ id: t.id, walletId: t.walletId }));
+      .map((t) => ({
+        id: t.id,
+        walletId: t.walletId,
+        providerId: t.providerId,
+        correlationId: t.correlationId,
+      }));
   }
 
   async lockPendingReference(id: string): Promise<WagerTransaction | null> {

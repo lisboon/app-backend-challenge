@@ -405,7 +405,7 @@ export class WagerTransaction {
     return undefined;
   }
 
-  markPendingReference(now: Date): void {
+  markPendingReference(now: Date, ttlSeconds?: number): void {
     assertWagerTransactionTransition(
       this._status,
       WagerTransactionStatus.PendingReference,
@@ -414,18 +414,18 @@ export class WagerTransaction {
       throw new Error('transação sem referência não pode aguardá-la');
     }
     this._status = WagerTransactionStatus.PendingReference;
-    this._nextReferenceAttemptAt = new Date(
-      now.getTime() + exponentialBackoff(1),
-    );
+    this._nextReferenceAttemptAt = this.referenceAttemptAt(now, 1, ttlSeconds);
   }
 
-  scheduleReferenceRetry(now: Date): void {
+  scheduleReferenceRetry(now: Date, ttlSeconds?: number): void {
     if (this._status !== WagerTransactionStatus.PendingReference) {
       throw new InvalidTransactionStateError(this._status);
     }
     this._referenceAttempts += 1;
-    this._nextReferenceAttemptAt = new Date(
-      now.getTime() + exponentialBackoff(this._referenceAttempts),
+    this._nextReferenceAttemptAt = this.referenceAttemptAt(
+      now,
+      this._referenceAttempts,
+      ttlSeconds,
     );
   }
 
@@ -438,7 +438,7 @@ export class WagerTransaction {
   }
 
   referenceExpired(now: Date, ttlSeconds: number): boolean {
-    return now.getTime() >= this.createdAt.getTime() + ttlSeconds * 1000;
+    return now.getTime() >= this.referenceDeadline(ttlSeconds);
   }
 
   markProcessed(
@@ -459,6 +459,23 @@ export class WagerTransaction {
 
   reject(code: FailureCode, resultBalance: Money, at: Date): void {
     this.settle(WagerTransactionStatus.Rejected, code, resultBalance, at);
+  }
+
+  private referenceDeadline(ttlSeconds: number): number {
+    return this.createdAt.getTime() + ttlSeconds * 1000;
+  }
+
+  private referenceAttemptAt(
+    now: Date,
+    attempts: number,
+    ttlSeconds?: number,
+  ): Date {
+    const next = now.getTime() + exponentialBackoff(attempts);
+    return new Date(
+      ttlSeconds === undefined
+        ? next
+        : Math.min(next, this.referenceDeadline(ttlSeconds)),
+    );
   }
 
   private settle(

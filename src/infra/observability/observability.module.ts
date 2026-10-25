@@ -3,15 +3,23 @@ import { Registry } from 'prom-client';
 
 import { MetricsController } from './metrics.controller';
 import { PrometheusOutboxMonitor } from './outbox-monitor';
+import { PrometheusPendingReferenceMonitor } from './pending-reference-monitor';
 import { PrometheusReconciliationMonitor } from './reconciliation-monitor';
 
 export const OUTBOX_MONITOR = Symbol('OUTBOX_MONITOR');
+export const PENDING_REFERENCE_MONITOR = Symbol('PENDING_REFERENCE_MONITOR');
 
 export const RECONCILIATION_MONITOR = Symbol('RECONCILIATION_MONITOR');
 @Global()
 @Module({
   controllers: [MetricsController],
   providers: [
+    {
+      provide: PENDING_REFERENCE_MONITOR,
+      inject: [Registry],
+      useFactory: (registry: Registry): PrometheusPendingReferenceMonitor =>
+        new PrometheusPendingReferenceMonitor(registry),
+    },
     {
       provide: OUTBOX_MONITOR,
       inject: [Registry],
@@ -26,6 +34,11 @@ export const RECONCILIATION_MONITOR = Symbol('RECONCILIATION_MONITOR');
         new PrometheusReconciliationMonitor(registry),
     },
   ],
-  exports: [Registry, RECONCILIATION_MONITOR, OUTBOX_MONITOR],
+  exports: [
+    Registry,
+    RECONCILIATION_MONITOR,
+    OUTBOX_MONITOR,
+    PENDING_REFERENCE_MONITOR,
+  ],
 })
 export class ObservabilityModule {}

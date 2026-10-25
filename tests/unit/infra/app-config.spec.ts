@@ -27,11 +27,37 @@ const problemsOf = (env: Record<string, string | undefined>): string[] => {
 };
 
 describe('loadConfig', () => {
+  it('lê TTL e polling próprios de referências pendentes', () => {
+    const config = loadConfig({
+      ...valid,
+      PENDING_REFERENCE_TTL_SECONDS: '60',
+      PENDING_REFERENCE_POLL_INTERVAL_MS: '40',
+    });
+    expect(config.pendingReferenceTtlSeconds).toBe(60);
+    expect(config.pendingReferencePollIntervalMs).toBe(40);
+  });
+
+  for (const name of [
+    'PENDING_REFERENCE_TTL_SECONDS',
+    'PENDING_REFERENCE_POLL_INTERVAL_MS',
+  ]) {
+    it.each(['0', '-1', '1.5', 'abc', '2147483648'])(
+      `recusa ${name} inválido: %s`,
+      (value) => {
+        expect(problemsOf({ ...valid, [name]: value })).toEqual([
+          `${name} deve ser inteiro entre 1 e 2147483647`,
+        ]);
+      },
+    );
+  }
+
   it('lê a configuração completa', () => {
     expect(loadConfig(valid)).toEqual({
       port: 3000,
       workerMetricsPort: 3001,
       outboxPollIntervalMs: 500,
+      pendingReferencePollIntervalMs: 1000,
+      pendingReferenceTtlSeconds: 3600,
       databaseUrl: valid.DATABASE_URL,
       sqs: {
         region: 'us-east-1',

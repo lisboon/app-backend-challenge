@@ -13,6 +13,7 @@ export interface TestInfra {
   sqsEndpoint: string;
   wagerQueueName: string;
   eventsQueueName: string;
+  pendingReferenceTtlSeconds?: number;
 }
 
 export function testInfra(): TestInfra {
@@ -39,6 +40,8 @@ export async function startApp(
     port: 0,
     workerMetricsPort: 0,
     outboxPollIntervalMs: 500,
+    pendingReferencePollIntervalMs: 1000,
+    pendingReferenceTtlSeconds: infra.pendingReferenceTtlSeconds ?? 3600,
     databaseUrl: infra.databaseUrl,
     sqs: {
       region: 'us-east-1',

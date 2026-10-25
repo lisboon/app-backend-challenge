@@ -148,6 +148,9 @@ describe('WagerTransaction: referências e reversões', () => {
     expect(win.requiresReference()).toBe(false);
     const referenced = reversal({ kind: WagerTransactionKind.Win });
     expect(referenced.requiresReference()).toBe(true);
+    expect(referenced.payloadHash).toBe(
+      'v1:9bb4bc4ad0790852787c123cff8d086629dee8c6292b1d04a4b0b274b85969f3',
+    );
     expect(referenced.payloadHash).not.toBe(win.payloadHash);
     expect(
       reversal({
@@ -367,6 +370,15 @@ describe('WagerTransaction: referências e reversões', () => {
     expect(tx.referenceTransactionId).toBe('bet-id');
     expect(tx.nextReferenceAttemptAt).toBeUndefined();
     expect(tx.correlationId).toBe('original');
+  });
+
+  it('backoff de uma referência ausente não agenda além do TTL', () => {
+    const tx = reversal();
+    tx.markPendingReference(at, 3);
+    tx.scheduleReferenceRetry(new Date(at.getTime() + 1000), 3);
+    tx.scheduleReferenceRetry(new Date(at.getTime() + 2000), 3);
+    expect(tx.nextReferenceAttemptAt?.getTime()).toBe(at.getTime() + 3000);
+    expect(tx.isReferenceDue(new Date(at.getTime() + 3000))).toBe(true);
   });
   for (const from of Object.values(WagerTransactionStatus)) {
     for (const to of Object.values(WagerTransactionStatus)) {
