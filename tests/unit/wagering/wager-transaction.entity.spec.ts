@@ -79,6 +79,12 @@ describe('WagerTransaction.opening', () => {
 });
 
 describe('WagerTransaction.create', () => {
+  it('recusa o provider reservado antes de criar uma transação externa', () => {
+    expect(() => submitted({ providerId: INTERNAL_PROVIDER_ID })).toThrow(
+      expect.objectContaining({ failureCode: 'PROVIDER_RESERVED' }),
+    );
+  });
+
   it('nasce pendente, sem desfecho', () => {
     const transaction = submitted();
 
@@ -141,6 +147,15 @@ describe('WagerTransaction.create', () => {
 });
 
 describe('WagerTransaction: movimento e regras', () => {
+  it('rejeita crédito que excederia o limite do saldo', () => {
+    expect(
+      submitted({
+        kind: WagerTransactionKind.Win,
+        money: brl('0.01'),
+      }).rejectionFor(wallet('999999999999999999.99')),
+    ).toBe('BALANCE_LIMIT_EXCEEDED');
+  });
+
   it.each([
     [WagerTransactionKind.Bet, MovementDirection.Debit],
     [WagerTransactionKind.Win, MovementDirection.Credit],

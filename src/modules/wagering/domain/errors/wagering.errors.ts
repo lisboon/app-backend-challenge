@@ -1,6 +1,15 @@
 import { DomainError } from '../../../@shared/domain/errors/domain.error';
 import { FailureCode } from '../../../@shared/domain/failure-code';
 
+export class ProviderReservedError extends DomainError {
+  constructor() {
+    super(
+      FailureCode.PROVIDER_RESERVED,
+      'o provedor internal é reservado para operações internas',
+    );
+  }
+}
+
 export class TransactionKindNotSubmittableError extends DomainError {
   constructor() {
     super(

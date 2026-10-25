@@ -118,6 +118,64 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
   };
 
   describe('POST /wagering/transactions', () => {
+    it('provider reservado responde 400 sem gravar transação ou evento', async () => {
+      const wallet = await open();
+      const response = await submit(wager(wallet, { providerId: 'internal' }));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        failureCode: 'PROVIDER_RESERVED',
+      });
+      expect(
+        await count(
+          'select count(*) as n from wager_transactions where wallet_id = ?',
+          [wallet.walletId],
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          'select count(*) as n from outbox_messages where aggregate_id = ?',
+          [wallet.walletId],
+        ),
+      ).toBe(2);
+      await invariant(wallet.walletId);
+    });
+
+    it('estouro do limite é rejeitado, consultável, idempotente e gera evento', async () => {
+      const wallet = await open('999999999999999999.99');
+      const body = wager(wallet, { kind: 'WIN', money: brl('0.01') });
+      const key = uuid();
+      const response = await submit(body, key);
+      expect(response.status).toBe(422);
+      const rejected = (await response.json()) as Submitted;
+      expect(rejected).toMatchObject({
+        status: 'REJECTED',
+        failureCode: 'BALANCE_LIMIT_EXCEEDED',
+        balance: brl('999999999999999999.99'),
+      });
+      const get = await fetch(
+        `${baseUrl}/wagering/transactions/${rejected.transactionId}`,
+      );
+      expect(get.status).toBe(200);
+      expect(await get.json()).toMatchObject({
+        status: 'REJECTED',
+        failureCode: 'BALANCE_LIMIT_EXCEEDED',
+      });
+      const replay = await submit(body, key);
+      expect(replay.status).toBe(422);
+      expect(await replay.json()).toEqual({
+        ...rejected,
+        idempotentReplay: true,
+      });
+      expect(
+        await count(
+          "select count(*) as n from outbox_messages where event_type = 'WagerTransactionRejected' and payload->'data'->>'transactionId' = ?",
+          [rejected.transactionId],
+        ),
+      ).toBe(1);
+      expect(await balanceOf(wallet.walletId)).toBe('999999999999999999.99');
+      await invariant(wallet.walletId);
+    });
+
     it('saldo 100, apostas de 80 e 80: a primeira aplica e a segunda é rejeitada', async () => {
       const wallet = await open('100.00');
 

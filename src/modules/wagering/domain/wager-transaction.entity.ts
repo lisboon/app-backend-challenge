@@ -1,8 +1,10 @@
+import { MoneyOverflowError } from '../../@shared/domain/errors/money.errors';
 import { FailureCode } from '../../@shared/domain/failure-code';
 import type { Money } from '../../@shared/domain/money';
 import { payloadHash } from '../../@shared/domain/payload-hash';
 import {
   InvalidTransactionStateError,
+  ProviderReservedError,
   TransactionAmountInvalidError,
   TransactionKindNotSubmittableError,
 } from './errors/wagering.errors';
@@ -106,6 +108,9 @@ export class WagerTransaction {
   static create(props: CreateWagerTransactionProps): WagerTransaction {
     if (props.kind === WagerTransactionKind.Opening) {
       throw new TransactionKindNotSubmittableError();
+    }
+    if (props.providerId === INTERNAL_PROVIDER_ID) {
+      throw new ProviderReservedError();
     }
     if (props.kind !== WagerTransactionKind.Loss && !props.money.isPositive()) {
       throw new TransactionAmountInvalidError();
@@ -235,6 +240,16 @@ export class WagerTransaction {
       wallet.balance.isLessThan(this.money)
     ) {
       return FailureCode.INSUFFICIENT_BALANCE;
+    }
+    if (this.kind === WagerTransactionKind.Win) {
+      try {
+        wallet.balance.add(this.money);
+      } catch (error) {
+        if (error instanceof MoneyOverflowError) {
+          return FailureCode.BALANCE_LIMIT_EXCEEDED;
+        }
+        throw error;
+      }
     }
     return undefined;
   }
