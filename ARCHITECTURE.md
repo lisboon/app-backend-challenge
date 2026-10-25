@@ -267,8 +267,8 @@ cada um tem um teste que o viola por SQL cru
 | referência pertence à mesma wallet | FK composta `wager_tx_reference_wallet_fk` |
 | referência processada, compatível em tipo, identidade e valor da reversão | trigger diferido `wager_transactions_reference_valid` (23514) |
 | reversão única por tipo e referência | índice parcial `wager_tx_single_reversal_uk` (23505) |
-| BET revertido uma única vez em termos líquidos | trigger diferido `wager_transactions_single_net_reversal` (23514) |
-| tentativas não negativas, próxima tentativa somente em pendência, referência proibida em BET/LOSS/OPENING | `wager_tx_reference_attempts_ck`, `wager_tx_pending_reference_ck` e `wager_tx_reference_not_allowed_ck` |
+| BET revertido uma única vez em termos líquidos, e WIN só sobre BET que ainda vale | trigger diferido `wager_transactions_single_net_reversal` (23514) |
+| tentativas não negativas, próxima tentativa somente em pendência, referência proibida em BET/LOSS/OPENING, nenhuma referência a si mesma | `wager_tx_reference_attempts_ck`, `wager_tx_pending_reference_ck`, `wager_tx_reference_not_allowed_ck` e `wager_tx_reference_not_self_ck` |
 
 **Interpretações adotadas:**
 
@@ -578,15 +578,20 @@ a depender da ordem física das linhas.
 
 A referência é resolvida por `(providerId, referenceExternalTransactionId)`.
 `REFUND` exige `BET`; `ROLLBACK` exige `BET`, `WIN` ou `REFUND`. `WIN` pode
-referenciar `BET`, mas também continua funcionando sem referência. Player,
-wallet, moeda e rodada precisam coincidir. Referência `REJECTED` é recusada;
+referenciar `BET`, mas também continua funcionando sem referência. Uma operação
+não pode referenciar a si mesma (`REFERENCE_SELF`, 400, e
+`wager_tx_reference_not_self_ck` no schema): ela ficaria esperando por ela
+própria. Player, wallet, moeda e rodada precisam coincidir. A busca já garante
+o mesmo provedor e o id externo; o trigger SQL confere de novo os dois.
+Referência `REJECTED` é recusada;
 referência inexistente ou ainda `PENDING_REFERENCE` deixa a operação pendente.
 Somente `PROCESSED` pode ser aplicada. `OPENING` nunca serve como referência.
 
 A referência externa é obrigatória em `REFUND`/`ROLLBACK` e opcional em `WIN`.
 Interpretamos que é proibida em `BET` e `LOSS`, pois o enunciado não define
 referência para esses tipos. Falhas de contrato não gravam transação:
-`REFERENCE_REQUIRED`, `REFERENCE_NOT_ALLOWED` e `PROVIDER_RESERVED` são 400.
+`REFERENCE_REQUIRED`, `REFERENCE_NOT_ALLOWED`, `REFERENCE_SELF` e
+`PROVIDER_RESERVED` são 400.
 O identificador `internal` pertence exclusivamente à abertura de wallet.
 
 A primeira falha determina o desfecho, nesta ordem:
@@ -605,7 +610,8 @@ Todas as falhas de negócio são 422, persistidas e consultáveis, com evento de
 rejeição e o saldo observado. O estouro é avaliado antes da aplicação do
 movimento, para não perder o registro de auditoria por exceção aritmética.
 `REFERENCE_NOT_FOUND` também é negócio, exclusivamente na expiração descrita
-abaixo. WIN com referência não exige valor igual e não tem limite de quantidade.
+abaixo. WIN com referência não exige valor igual e não tem limite de quantidade,
+desde que o BET ainda valha (ver abaixo).
 
 REFUND credita o mesmo valor do BET. ROLLBACK inverte a direção da referência:
 BET gera crédito; WIN e REFUND geram débito. A validação de domínio usa o tipo;
@@ -621,6 +627,23 @@ líquida; isso não permite outro REFUND do mesmo BET. Não se reverte ROLLBACK.
 | BET → REFUND → ROLLBACK(BET) | 100 → 75 → 100; último rejeitado, pois levaria a 125 |
 | BET → ROLLBACK(BET) → REFUND | 100 → 75 → 100; último rejeitado |
 | BET → REFUND → ROLLBACK(REFUND) → ROLLBACK(BET) | 100 → 75 → 100 → 75 → 100; aceita |
+
+**WIN depende de um BET que ainda vale.** O §3 trata a operação com referência
+como dependente da referenciada, e a tabela do §7 diz que o REFUND "reverte uma
+`BET`". Um WIN que referencia um BET revertido em termos líquidos, pela mesma
+regra acima, é rejeitado com `REFERENCE_ALREADY_REVERSED`, inclusive quando
+estava pendente e o BET chegou já devolvido. Sem isso, o prêmio de uma aposta
+cancelada seria pago sem stake. O schema confere o mesmo no trigger
+`wager_transactions_single_net_reversal`.
+
+| Sequência com saldo inicial 100 | Conta e desfecho |
+|---|---|
+| BET 25 → REFUND → WIN 500 | 100 → 75 → 100; WIN rejeitado, pois levaria a 600 sem aposta valendo |
+| BET 25 → REFUND → ROLLBACK(REFUND) → WIN 500 | 100 → 75 → 100 → 75 → 575; aceita, o BET voltou a valer |
+
+A regra é assimétrica de propósito: reverter um BET que já tem WIN continua
+permitido, porque o provedor pode cancelar a aposta. Desfazer o prêmio é papel
+do `ROLLBACK` do próprio WIN, que segue as regras de reversão.
 
 ### Estados, persistência e aplicação compartilhada
 
@@ -652,7 +675,10 @@ direto. A migration é reversível e seu round-trip é testado com dados.
 
 A coluna `correlation_id` preserva a requisição original. O backfill de linhas
 anteriores usa o próprio id da transação, pois a correlação original não estava
-persistida. O worker reutiliza esse valor nos eventos de resolução. Ambos os
+persistida. Por isso, reverter a `Migration20261025000005WagerReversals` e
+aplicá-la de novo sobre uma base populada substitui as correlações reais pelo
+id da transação, como a ressalva da coluna `sequence` da outbox (issue #10). O
+worker reutiliza esse valor nos eventos de resolução. Ambos os
 identificadores de referência aparecem no GET; o interno fica preenchido
 somente em uma transação processada que tenha referência externa.
 

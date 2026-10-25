@@ -112,6 +112,17 @@ describe('WagerTransaction: referências e reversões', () => {
       );
     },
   );
+  it.each([
+    WagerTransactionKind.Win,
+    WagerTransactionKind.Refund,
+    WagerTransactionKind.Rollback,
+  ])('recusa %s que referencia a si mesmo', (kind) => {
+    expect(() =>
+      submitted({ kind, referenceExternalTransactionId: 'ext-1' }),
+    ).toThrow(
+      expect.objectContaining({ failureCode: FailureCode.REFERENCE_SELF }),
+    );
+  });
   it.each([WagerTransactionKind.Bet, WagerTransactionKind.Loss])(
     'proíbe referência em %s',
     (kind) => {
@@ -276,12 +287,34 @@ describe('WagerTransaction: referências e reversões', () => {
     ).toBe(FailureCode.REFERENCE_ALREADY_REVERSED);
   });
   it('WIN não é reversão, nem exige mesmo valor ou quantidade máxima', () => {
+    const otherWin = reference({
+      id: 'win-id',
+      kind: WagerTransactionKind.Win,
+      referenceExternalTransactionId: 'bet-external',
+      referenceTransactionId: 'bet-id',
+    });
     expect(
       reversal({
         kind: WagerTransactionKind.Win,
         money: brl('1.00'),
-      }).rejectionFor(wallet(), reference(), [refund(), undoBet()]),
+      }).rejectionFor(wallet(), reference(), [
+        otherWin,
+        refund(),
+        undoRefund(),
+      ]),
     ).toBeUndefined();
+  });
+  it.each([
+    ['REFUND vivo', () => [refund()]],
+    ['ROLLBACK aplicado', () => [undoBet()]],
+  ])('WIN não é pago sobre BET revertido por %s', (_caso, reversals) => {
+    expect(
+      reversal({ kind: WagerTransactionKind.Win }).rejectionFor(
+        wallet(),
+        reference(),
+        reversals(),
+      ),
+    ).toBe(FailureCode.REFERENCE_ALREADY_REVERSED);
   });
   it('reversão exige valor igual', () => {
     expect(

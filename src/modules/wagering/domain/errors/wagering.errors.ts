@@ -28,6 +28,15 @@ export class ReferenceNotAllowedError extends DomainError {
   }
 }
 
+export class ReferenceSelfError extends DomainError {
+  constructor() {
+    super(
+      FailureCode.REFERENCE_SELF,
+      'a transação não pode referenciar a si mesma',
+    );
+  }
+}
+
 export class ReferenceAlreadyReversedError extends DomainError {
   constructor() {
     super(

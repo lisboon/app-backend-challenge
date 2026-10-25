@@ -320,6 +320,35 @@ describe('referências pendentes com PostgreSQL e LocalStack reais', () => {
     expect(await invariant(wallet)).toBe('85.00');
   });
 
+  it('WIN pendente é rejeitado se o BET chega e é devolvido antes da resolução', async () => {
+    const wallet = await open();
+    const external = uuid();
+    const payload = body(wallet, {
+      kind: 'WIN',
+      money: brl('500.00'),
+      referenceExternalTransactionId: external,
+    });
+    const accepted = await submit(payload);
+    expect(accepted.status).toBe(202);
+    await bet(wallet, external);
+    const refund = await submit(
+      body(wallet, {
+        kind: 'REFUND',
+        referenceExternalTransactionId: external,
+      }),
+    );
+    expect(refund.status).toBe(201);
+    expect(await cycle()).toEqual({ attempted: 1 });
+    const replay = await submit(payload, accepted.key);
+    expect(replay.status).toBe(422);
+    expect(replay.result).toMatchObject({
+      status: 'REJECTED',
+      failureCode: 'REFERENCE_ALREADY_REVERSED',
+      balance: brl('100.00'),
+    });
+    expect(await invariant(wallet)).toBe('100.00');
+  });
+
   it('ROLLBACK de REFUND que espera BET resolve a cadeia em ordem', async () => {
     const wallet = await open();
     const external = uuid();

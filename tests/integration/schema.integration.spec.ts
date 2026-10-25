@@ -1014,6 +1014,30 @@ describe('schema (integração com PostgreSQL real)', () => {
       await invariant(opened.walletId);
     });
 
+    it('SQL cru recusa transação que referencia a si mesma', async () => {
+      const opened = await openWallet('100.00');
+      const id = uuid();
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            insertTransaction(em, {
+              id,
+              walletId: opened.walletId,
+              playerId: opened.playerId,
+              currency: 'BRL',
+              amount: '25.00',
+              kind: 'REFUND',
+              status: 'PENDING_REFERENCE',
+              referenceExternalTransactionId: `ext-${id}`,
+            }),
+          ),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'wager_tx_reference_not_self_ck',
+      });
+    });
+
     it('correlation_id é obrigatório e tem NOT NULL nomeado', async () => {
       const opened = await openWallet('0.00');
       expect(
@@ -1108,6 +1132,33 @@ describe('schema (integração com PostgreSQL real)', () => {
         await invariant(opened.walletId);
       },
     );
+
+    it.each(['REFUND', 'ROLLBACK'] as const)(
+      'trigger impede WIN sobre BET revertido por %s',
+      async (reversal) => {
+        const { opened, id } = await bet();
+        await rawMove(opened, reversal, id);
+        expect(await failureOf(() => rawMove(opened, 'WIN', id))).toMatchObject(
+          {
+            code: '23514',
+            constraint: 'wager_transactions_single_net_reversal',
+          },
+        );
+        await invariant(opened.walletId);
+      },
+    );
+
+    it('WIN sobre BET cujo REFUND foi desfeito é aceito', async () => {
+      const { opened, id } = await bet();
+      const refund = await rawMove(opened, 'REFUND', id);
+      await rawMove(opened, 'ROLLBACK', refund);
+      await rawMove(opened, 'WIN', id);
+      await rawMove(opened, 'WIN', id);
+      expect(await ledgerMatchesBalance(orm, opened.walletId)).toEqual({
+        stored: '125.00',
+        rebuilt: '125.00',
+      });
+    });
 
     it('REFUND desfeito permite ROLLBACK do BET e mantém saldo 100', async () => {
       const { opened, id } = await bet();

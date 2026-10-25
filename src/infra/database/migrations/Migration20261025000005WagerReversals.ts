@@ -17,7 +17,9 @@ alter table wager_transactions alter column correlation_id set not null,
   add constraint wager_tx_reference_state_ck check(
     (reference_transaction_id is not null)=(reference_external_transaction_id is not null and status='PROCESSED')),
   add constraint wager_tx_reference_not_allowed_ck check(
-    kind not in ('BET','LOSS','OPENING') or reference_external_transaction_id is null);
+    kind not in ('BET','LOSS','OPENING') or reference_external_transaction_id is null),
+  add constraint wager_tx_reference_not_self_ck check(
+    reference_external_transaction_id is distinct from external_transaction_id);
 alter table wager_transactions drop constraint wager_tx_reference_fk;
 alter table wager_transactions add constraint wager_tx_reference_wallet_fk
   foreign key(reference_transaction_id,wallet_id) references wager_transactions(id,wallet_id);
@@ -96,17 +98,20 @@ declare
   tx wager_transactions%rowtype;
   ref wager_transactions%rowtype;
   bet uuid;
+  rolled_back boolean;
+  refunded boolean;
 begin
   select * into tx from wager_transactions where id=new.id;
-  if tx.status<>'PROCESSED' or tx.kind not in ('REFUND','ROLLBACK') then return null; end if;
+  if tx.status<>'PROCESSED' or tx.kind not in ('WIN','REFUND','ROLLBACK') or tx.reference_transaction_id is null then return null; end if;
   select * into ref from wager_transactions where id=tx.reference_transaction_id;
   if ref.kind='BET' then bet=ref.id;
   elsif tx.kind='ROLLBACK' and ref.kind='REFUND' then bet=ref.reference_transaction_id;
   else return null;
   end if;
-  if exists(select 1 from wager_transactions r where r.reference_transaction_id=bet and r.kind='ROLLBACK' and r.status='PROCESSED')
-    and exists(select 1 from wager_transactions f where f.reference_transaction_id=bet and f.kind='REFUND' and f.status='PROCESSED'
-      and not exists(select 1 from wager_transactions undo where undo.reference_transaction_id=f.id and undo.kind='ROLLBACK' and undo.status='PROCESSED')) then
+  rolled_back=exists(select 1 from wager_transactions r where r.reference_transaction_id=bet and r.kind='ROLLBACK' and r.status='PROCESSED');
+  refunded=exists(select 1 from wager_transactions f where f.reference_transaction_id=bet and f.kind='REFUND' and f.status='PROCESSED'
+    and not exists(select 1 from wager_transactions undo where undo.reference_transaction_id=f.id and undo.kind='ROLLBACK' and undo.status='PROCESSED'));
+  if (tx.kind='WIN' and (rolled_back or refunded)) or (rolled_back and refunded) then
     raise exception 'referência já revertida em termos líquidos' using errcode='23514',constraint='wager_transactions_single_net_reversal';
   end if;
   return null;
@@ -204,7 +209,7 @@ alter table wager_transactions drop constraint wager_tx_reference_wallet_fk;
 alter table wager_transactions add constraint wager_tx_reference_fk foreign key(reference_transaction_id) references wager_transactions(id);
 alter table wager_transactions drop constraint wager_tx_reference_attempts_ck,
   drop constraint wager_tx_pending_reference_ck, drop constraint wager_tx_reference_state_ck,
-  drop constraint wager_tx_reference_not_allowed_ck,
+  drop constraint wager_tx_reference_not_allowed_ck, drop constraint wager_tx_reference_not_self_ck,
   drop column correlation_id, drop column next_reference_attempt_at, drop column reference_attempts;
 `);
   }

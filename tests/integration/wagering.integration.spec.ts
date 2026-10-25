@@ -896,6 +896,68 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       },
     );
 
+    it('WIN não é pago sobre BET devolvido', async () => {
+      const wallet = await open('100.00');
+      const bet = await applied(wallet, { kind: 'BET', money: brl('25.00') });
+      const reference = bet.body.externalTransactionId;
+      await applied(wallet, {
+        kind: 'REFUND',
+        money: brl('25.00'),
+        referenceExternalTransactionId: reference,
+      });
+      await rejected(
+        wallet,
+        {
+          kind: 'WIN',
+          money: brl('500.00'),
+          referenceExternalTransactionId: reference,
+        },
+        'REFERENCE_ALREADY_REVERSED',
+      );
+      expect(await balanceOf(wallet.walletId)).toBe('100.00');
+    });
+
+    it('WIN volta a valer quando o REFUND é desfeito', async () => {
+      const wallet = await open('100.00');
+      const bet = await applied(wallet, { kind: 'BET', money: brl('25.00') });
+      const reference = bet.body.externalTransactionId;
+      const refund = await applied(wallet, {
+        kind: 'REFUND',
+        money: brl('25.00'),
+        referenceExternalTransactionId: reference,
+      });
+      await applied(wallet, {
+        kind: 'ROLLBACK',
+        money: brl('25.00'),
+        referenceExternalTransactionId: refund.body.externalTransactionId,
+      });
+      const win = await applied(wallet, {
+        kind: 'WIN',
+        money: brl('500.00'),
+        referenceExternalTransactionId: reference,
+      });
+      expect(win.result.balance).toEqual(brl('575.00'));
+    });
+
+    it('transação que referencia a si mesma responde 400 sem gravar', async () => {
+      const wallet = await open();
+      const payload = wager(wallet, { kind: 'REFUND' });
+      const response = await submit({
+        ...payload,
+        referenceExternalTransactionId: payload.externalTransactionId,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        failureCode: 'REFERENCE_SELF',
+      });
+      expect(
+        await count(
+          'select count(*) as n from wager_transactions where external_transaction_id=?',
+          [payload.externalTransactionId],
+        ),
+      ).toBe(0);
+    });
+
     it.each([
       ['BET', 'some', 'REFERENCE_NOT_ALLOWED'],
       ['LOSS', 'some', 'REFERENCE_NOT_ALLOWED'],

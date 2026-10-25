@@ -8,6 +8,7 @@ import {
   ProviderReservedError,
   ReferenceNotAllowedError,
   ReferenceRequiredError,
+  ReferenceSelfError,
   TransactionAmountInvalidError,
   TransactionKindNotSubmittableError,
 } from './errors/wagering.errors';
@@ -147,6 +148,9 @@ export class WagerTransaction {
       props.referenceExternalTransactionId !== undefined
     ) {
       throw new ReferenceNotAllowedError();
+    }
+    if (props.referenceExternalTransactionId === props.externalTransactionId) {
+      throw new ReferenceSelfError();
     }
     const money = props.money.toJSON();
     return new WagerTransaction(
@@ -347,35 +351,33 @@ export class WagerTransaction {
       if (reference.status !== WagerTransactionStatus.Processed) {
         return undefined;
       }
-      if (this.kind !== WagerTransactionKind.Win) {
-        const processed = reversals.filter(
-          (t) => t.status === WagerTransactionStatus.Processed,
-        );
-        const direct = processed.filter(
-          (t) => t.referenceTransactionId === reference.id,
-        );
-        if (direct.some((t) => t.kind === this.kind)) {
+      const processed = reversals.filter(
+        (t) => t.status === WagerTransactionStatus.Processed,
+      );
+      const direct = processed.filter(
+        (t) => t.referenceTransactionId === reference.id,
+      );
+      const rollback = direct.some(
+        (t) => t.kind === WagerTransactionKind.Rollback,
+      );
+      const liveRefund = direct.some(
+        (t) =>
+          t.kind === WagerTransactionKind.Refund &&
+          !processed.some(
+            (child) =>
+              child.kind === WagerTransactionKind.Rollback &&
+              child.referenceTransactionId === t.id,
+          ),
+      );
+      const betReversed =
+        reference.kind === WagerTransactionKind.Bet && (rollback || liveRefund);
+      if (this.kind === WagerTransactionKind.Win) {
+        if (betReversed) {
           return FailureCode.REFERENCE_ALREADY_REVERSED;
         }
-        if (reference.kind === WagerTransactionKind.Bet) {
-          const rollback = direct.some(
-            (t) => t.kind === WagerTransactionKind.Rollback,
-          );
-          const liveRefund = direct.some(
-            (t) =>
-              t.kind === WagerTransactionKind.Refund &&
-              !processed.some(
-                (child) =>
-                  child.kind === WagerTransactionKind.Rollback &&
-                  child.referenceTransactionId === t.id,
-              ),
-          );
-          if (
-            (this.kind === WagerTransactionKind.Refund && rollback) ||
-            (this.kind === WagerTransactionKind.Rollback && liveRefund)
-          ) {
-            return FailureCode.REFERENCE_ALREADY_REVERSED;
-          }
+      } else {
+        if (direct.some((t) => t.kind === this.kind) || betReversed) {
+          return FailureCode.REFERENCE_ALREADY_REVERSED;
         }
         if (!this.money.equals(reference.money)) {
           return FailureCode.REVERSAL_AMOUNT_MISMATCH;
