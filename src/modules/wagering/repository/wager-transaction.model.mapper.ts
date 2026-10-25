@@ -26,8 +26,12 @@ export const WagerTransactionModelMapper = {
       gameId: transaction.gameId ?? null,
       kind: transaction.kind,
       amount: transaction.money.toString(),
-      referenceExternalTransactionId: null,
-      referenceTransactionId: null,
+      referenceExternalTransactionId:
+        transaction.referenceExternalTransactionId ?? null,
+      referenceTransactionId: transaction.referenceTransactionId ?? null,
+      correlationId: transaction.correlationId,
+      referenceAttempts: transaction.referenceAttempts,
+      nextReferenceAttemptAt: transaction.nextReferenceAttemptAt ?? null,
       status: transaction.status,
       failureCode: transaction.failureCode ?? null,
       resultBalance: transaction.resultBalance?.toString() ?? null,
@@ -61,6 +65,12 @@ export const WagerTransactionModelMapper = {
             })
           : undefined,
       processedAt: row.processedAt ?? undefined,
+      referenceExternalTransactionId:
+        row.referenceExternalTransactionId ?? undefined,
+      referenceTransactionId: row.referenceTransactionId ?? undefined,
+      correlationId: row.correlationId,
+      referenceAttempts: row.referenceAttempts,
+      nextReferenceAttemptAt: row.nextReferenceAttemptAt ?? undefined,
     });
   },
 };

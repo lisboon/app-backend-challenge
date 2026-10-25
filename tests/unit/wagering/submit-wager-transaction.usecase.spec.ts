@@ -69,6 +69,37 @@ class FakeWallets implements WalletMovementGateway {
 }
 
 class FakeWagers implements WagerTransactionGateway {
+  async update(): Promise<void> {}
+
+  async findDueReferences(
+    now: Date,
+  ): Promise<{ id: string; walletId: string }[]> {
+    return this.all()
+      .filter((t) => t.isReferenceDue(now))
+      .map((t) => ({ id: t.id, walletId: t.walletId }));
+  }
+
+  async lockPendingReference(id: string): Promise<WagerTransaction | null> {
+    return (
+      this.all().find(
+        (t) =>
+          t.id === id && t.status === WagerTransactionStatus.PendingReference,
+      ) ?? null
+    );
+  }
+
+  async findReversals(id: string): Promise<WagerTransaction[]> {
+    return this.all().filter((t) => t.referenceTransactionId === id);
+  }
+
+  async accelerateReferences(): Promise<void> {}
+
+  async countPending(): Promise<number> {
+    return this.all().filter(
+      (t) => t.status === WagerTransactionStatus.PendingReference,
+    ).length;
+  }
+
   readonly stored: WagerTransaction[] = [];
 
   readonly committedElsewhere: WagerTransaction[] = [];
