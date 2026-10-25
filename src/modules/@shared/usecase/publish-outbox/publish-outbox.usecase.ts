@@ -1,5 +1,5 @@
+import { EventPublicationError } from '../../domain/errors/infrastructure.errors';
 import type { OutboxMessage } from '../../domain/outbox/outbox-message.entity';
-import { publicationErrorCode } from '../../domain/outbox/publication-error-code';
 import type {
   TransactionContext,
   TransactionManager,
@@ -110,7 +110,8 @@ export class PublishOutboxUseCase implements PublishOutboxUseCaseInterface {
     } catch (error) {
       message.scheduleRetry(this.clock.now());
       this.monitor.retryScheduled(message);
-      const code = publicationErrorCode(error);
+      const code =
+        error instanceof EventPublicationError ? error.code : 'Error';
       await this.outbox.update(message, code, trx);
       this.monitor.publicationFailed(message, code);
       return false;

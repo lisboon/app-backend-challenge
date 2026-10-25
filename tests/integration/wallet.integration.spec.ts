@@ -4,7 +4,7 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { FailureCode } from '../../src/modules/@shared/domain/failure-code';
-import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
+import { OutboxMessageRepository } from '../../src/modules/@shared/repository/outbox-message.repository';
 import { OpeningTransactionRepository } from '../../src/modules/wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
@@ -371,11 +371,11 @@ describe('wallets (integração HTTP com PostgreSQL real)', () => {
         failingLedger,
         new OpeningTransactionRepository(
           new WagerTransactionRepository(),
-          new OutboxRepository(),
+          new OutboxMessageRepository(),
         ),
         { next: uuid },
         { now: () => new Date() },
-        new OutboxRepository(),
+        new OutboxMessageRepository(),
       );
 
       const failure = await useCase

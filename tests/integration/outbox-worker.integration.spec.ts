@@ -126,6 +126,52 @@ describe('processo publicador da outbox', () => {
     return { child, stdout, stderr, port };
   };
 
+  it('PostgreSQL indisponível mantém a identificação da falha no log do ciclo', async () => {
+    const port = freePort();
+    const child = spawnWorker({
+      ...testAppEnv(0),
+      DATABASE_URL: 'postgresql://wager:senha-secreta@127.0.0.1:1/wager',
+      WORKER_METRICS_PORT: String(port),
+      OUTBOX_POLL_INTERVAL_MS: '50',
+    });
+    const stdout = new Response(child.stdout).text();
+    let errors = '';
+    const stderr = (async () => {
+      const decoder = new TextDecoder();
+      for await (const chunk of child.stderr) {
+        errors += decoder.decode(chunk, { stream: true });
+      }
+      errors += decoder.decode();
+    })();
+    const failures = () =>
+      errors
+        .split('\n')
+        .slice(0, -1)
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              message: { event?: string; errorCode?: string };
+            },
+        )
+        .filter((line) => line.message.event === 'outbox_cycle_failed');
+    try {
+      await eventually(async () => failures().length > 0);
+      expect(
+        (await fetch('http://127.0.0.1:' + port + '/metrics')).status,
+      ).toBe(200);
+    } finally {
+      child.kill('SIGKILL');
+      await child.exited;
+      await stderr;
+    }
+    expect(new Set(failures().map((line) => line.message.errorCode))).toEqual(
+      new Set(['InfrastructureUnavailableError']),
+    );
+    const output = errors + (await stdout);
+    expect(output).not.toContain('senha-secreta');
+    expect(output).not.toContain('postgresql://');
+  });
+
   it('SIGKILL durante o lote libera locks e outro processo publica todos os eventos confirmados', async () => {
     const messages = await seedOutbox(orm, 5);
     const proxy = gateSqs();

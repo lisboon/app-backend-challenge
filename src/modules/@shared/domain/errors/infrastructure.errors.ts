@@ -9,3 +9,10 @@ export class InfrastructureUnavailableError extends DomainError {
     );
   }
 }
+
+export class EventPublicationError extends Error {
+  constructor(readonly code: string) {
+    super('falha na publicação do evento');
+    this.name = new.target.name;
+  }
+}

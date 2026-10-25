@@ -11,7 +11,9 @@ import {
   type OutboxRow,
 } from './outbox-message.model.mapper';
 
-export class OutboxRepository implements OutboxGateway, PendingOutboxGateway {
+export class OutboxMessageRepository
+  implements OutboxGateway, PendingOutboxGateway
+{
   async findDue(
     now: Date,
     limit: number,

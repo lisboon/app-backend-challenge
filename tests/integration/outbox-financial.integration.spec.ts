@@ -5,7 +5,7 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import type { IntegrationEventJSON } from '../../src/modules/@shared/domain/event/integration-event';
 import type { OutboxGateway } from '../../src/modules/@shared/gateway/outbox.gateway';
-import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
+import { OutboxMessageRepository } from '../../src/modules/@shared/repository/outbox-message.repository';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
 import { SubmitWagerTransactionUseCase } from '../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
@@ -202,7 +202,7 @@ describe('eventos financeiros atômicos na outbox', () => {
     'falha %s da gravação na outbox desfaz todo o movimento',
     async (stage) => {
       const wallet = await open();
-      const real = new OutboxRepository();
+      const real = new OutboxMessageRepository();
       const failing: OutboxGateway = {
         create: async (message, trx) => {
           if (stage === 'antes') {
@@ -263,7 +263,7 @@ describe('eventos financeiros atômicos na outbox', () => {
     const secondLock = deferred();
     let now = new Date(Date.now() + 1000);
     const firstAt = now;
-    const outbox = new OutboxRepository();
+    const outbox = new OutboxMessageRepository();
     const realWallets = new WalletMovementRepository(
       new WalletRepository(),
       new LedgerRepository(),

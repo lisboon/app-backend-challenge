@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { Registry } from 'prom-client';
 
-import { publicationErrorCode } from '../../modules/@shared/domain/outbox/publication-error-code';
+import { DomainError } from '../../modules/@shared/domain/errors/domain.error';
+import { EventPublicationError } from '../../modules/@shared/domain/errors/infrastructure.errors';
 import type { PublishOutboxUseCaseInterface } from '../../modules/@shared/usecase/publish-outbox/publish-outbox.usecase.dto';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
@@ -67,7 +68,12 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error({
         event: 'outbox_cycle_failed',
-        errorCode: publicationErrorCode(error),
+        errorCode:
+          error instanceof EventPublicationError
+            ? error.code
+            : error instanceof DomainError
+              ? error.name
+              : 'Error',
       });
     }
     if (!this.stopping) {
