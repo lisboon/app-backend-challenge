@@ -1,6 +1,7 @@
 import { Migrator } from '@mikro-orm/migrations';
 import { defineConfig, type Options } from '@mikro-orm/postgresql';
 
+import { InboxMessageModel } from '../../modules/@shared/repository/inbox-message.model';
 import { OutboxMessageModel } from '../../modules/@shared/repository/outbox-message.model';
 import { WagerTransactionModel } from '../../modules/wagering/repository/wager-transaction.model';
 import { LedgerEntryModel } from '../../modules/wallet/repository/ledger-entry.model';
@@ -17,6 +18,7 @@ export function ormConfig(clientUrl: string): Options {
       LedgerEntryModel,
       WagerTransactionModel,
       OutboxMessageModel,
+      InboxMessageModel,
     ],
     extensions: [Migrator],
     allowGlobalContext: false,

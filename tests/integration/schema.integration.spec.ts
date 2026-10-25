@@ -247,9 +247,9 @@ describe('schema (integração com PostgreSQL real)', () => {
             .getConnection()
             .execute<{ n: string }[]>(
               `select (select count(*) from pg_tables where schemaname = 'public'
-                       and tablename in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages'))
+                       and tablename in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages', 'inbox_messages'))
                   + (select count(*) from pg_proc
-                      where proname like 'wallet%' or proname like 'wager%' or proname like 'outbox%') as n`,
+                      where proname like 'wallet%' or proname like 'wager%' or proname like 'outbox%' or proname like 'inbox%') as n`,
             )
         )[0].n;
 
@@ -257,7 +257,7 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(Number(await objects())).toBe(0);
 
       await orm.migrator.up();
-      expect(Number(await objects())).toBe(18);
+      expect(Number(await objects())).toBe(21);
     });
 
     it('reverter a última migration preserva rejeições gravadas em outra moeda', async () => {
@@ -1742,6 +1742,144 @@ describe('schema (integração com PostgreSQL real)', () => {
           [id],
         );
       expect(row).toEqual({ attempts: 1, last_error: 'TimeoutError' });
+    });
+  });
+  describe('inbox_messages', () => {
+    const insert = (em: EntityManager, messageId: string, hash = HASH) =>
+      em.execute(
+        "insert into inbox_messages (consumer_name,message_id,payload_hash,received_at) values ('wager-transactions',?,?,now())",
+        [messageId, hash],
+      );
+    const processed = async (messageId: string): Promise<void> => {
+      await inTransaction(async (em) => {
+        await insert(em, messageId);
+        await em.execute(
+          'update inbox_messages set processed_at = received_at where message_id = ?',
+          [messageId],
+        );
+      });
+    };
+
+    it('round-trip da migration da inbox preserva o schema anterior', async () => {
+      await orm.migrator.down({ to: 'Migration20261025000005WagerReversals' });
+      const [absent] = await orm.em
+        .fork()
+        .execute<{ name: string | null }[]>(
+          "select to_regclass('inbox_messages')::text as name",
+        );
+      expect(absent.name).toBeNull();
+      await orm.migrator.up();
+      const [present] = await orm.em
+        .fork()
+        .execute<{ name: string | null }[]>(
+          "select to_regclass('inbox_messages')::text as name",
+        );
+      expect(present.name).toBe('inbox_messages');
+    });
+
+    it('recusa o mesmo messageId duas vezes para o mesmo consumidor', async () => {
+      const messageId = uuid();
+      await inTransaction((em) => insert(em, messageId));
+      expect(
+        await failureOf(() => inTransaction((em) => insert(em, messageId))),
+      ).toMatchObject({ code: '23505', constraint: 'inbox_messages_pk' });
+    });
+
+    it('recusa hash fora do formato', async () => {
+      expect(
+        await failureOf(() =>
+          inTransaction((em) => insert(em, uuid(), 'sem-versao')),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_payload_hash_ck' });
+    });
+
+    it('recusa processamento anterior ao recebimento', async () => {
+      const messageId = uuid();
+      await inTransaction((em) => insert(em, messageId));
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "update inbox_messages set processed_at = received_at - interval '1 second' where message_id = ?",
+              [messageId],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_processed_at_ck' });
+    });
+
+    it.each([
+      "consumer_name = 'outro'",
+      "message_id = 'outro'",
+      "payload_hash = 'v1:" + 'b'.repeat(64) + "'",
+      "received_at = received_at + interval '1 second'",
+    ])('recusa alteração da identidade: %s', async (assignment) => {
+      const messageId = uuid();
+      await inTransaction((em) => insert(em, messageId));
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              'update inbox_messages set ' +
+                assignment +
+                ' where message_id = ?',
+              [messageId],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_message_immutable' });
+    });
+
+    it('recusa qualquer alteração depois de processada', async () => {
+      const messageId = uuid();
+      await processed(messageId);
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "update inbox_messages set processed_at = processed_at + interval '1 second' where message_id = ?",
+              [messageId],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_message_immutable' });
+    });
+
+    it('recusa DELETE', async () => {
+      const messageId = uuid();
+      await processed(messageId);
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute('delete from inbox_messages where message_id = ?', [
+              messageId,
+            ]),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_message_immutable' });
+    });
+
+    it('recusa TRUNCATE com o nome do trigger', async () => {
+      expect(
+        await failureOf(() =>
+          inTransaction((em) => em.execute('truncate inbox_messages')),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'inbox_message_no_truncate',
+      });
+    });
+
+    it('permite marcar como processada uma única vez', async () => {
+      const messageId = uuid();
+      await processed(messageId);
+      const [row] = await orm.em
+        .fork()
+        .execute<{ processed: boolean }[]>(
+          'select processed_at is not null as processed from inbox_messages where message_id = ?',
+          [messageId],
+        );
+      expect(row.processed).toBe(true);
     });
   });
 });
