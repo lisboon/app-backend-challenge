@@ -1,7 +1,10 @@
+import type { InboxDelivery } from '../../@shared/domain/inbox/inbox-message.entity';
 import type { TransactionManager } from '../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../@shared/gateway/id-generator.gateway';
+import { InboxMessageRepository } from '../../@shared/repository/inbox-message.repository';
 import { OutboxMessageRepository } from '../../@shared/repository/outbox-message.repository';
+import { InboxTransactionManager } from '../../@shared/usecase/inbox-transaction-manager';
 import { LedgerRepository } from '../../wallet/repository/ledger.repository';
 import { WalletMovementRepository } from '../../wallet/repository/wallet-movement.repository';
 import { WalletRepository } from '../../wallet/repository/wallet.repository';
@@ -23,6 +26,7 @@ export interface WageringFactoryDependencies {
 
 export interface WageringUseCases {
   submit: SubmitWagerTransactionUseCase;
+  submitFor: (delivery: InboxDelivery) => SubmitWagerTransactionUseCase;
   findById: FindWagerTransactionByIdUseCase;
   findByExternalId: FindWagerTransactionByExternalIdUseCase;
   resolvePending: ResolvePendingWagerTransactionsUseCase;
@@ -44,6 +48,18 @@ export const WageringFactory = {
       new LedgerRepository(),
       outbox,
     );
+    const inbox = new InboxMessageRepository();
+    const submitWith = (
+      transactions: TransactionManager,
+    ): SubmitWagerTransactionUseCase =>
+      new SubmitWagerTransactionUseCase(
+        transactions,
+        wagers,
+        wallets,
+        dependencies.ids,
+        dependencies.clock,
+        settlement,
+      );
     return {
       resolvePending: new ResolvePendingWagerTransactionsUseCase(
         dependencies.transactions,
@@ -53,14 +69,16 @@ export const WageringFactory = {
         dependencies.clock,
         dependencies.pendingMonitor,
       ),
-      submit: new SubmitWagerTransactionUseCase(
-        dependencies.transactions,
-        wagers,
-        wallets,
-        dependencies.ids,
-        dependencies.clock,
-        settlement,
-      ),
+      submit: submitWith(dependencies.transactions),
+      submitFor: (delivery) =>
+        submitWith(
+          new InboxTransactionManager(
+            dependencies.transactions,
+            inbox,
+            dependencies.clock,
+            delivery,
+          ),
+        ),
       findById: new FindWagerTransactionByIdUseCase(
         dependencies.transactions,
         wagers,

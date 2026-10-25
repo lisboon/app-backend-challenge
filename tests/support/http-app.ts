@@ -6,12 +6,14 @@ import { APP_CONFIG } from '../../src/infra/config/config.module';
 import { AppModule } from '../../src/infra/http/app.module';
 
 export const WAGER_QUEUE_NAME = 'wager-transactions.fifo';
+export const WAGER_DLQ_NAME = 'wager-transactions-dlq.fifo';
 export const EVENTS_QUEUE_NAME = 'wallet-events.fifo';
 
 export interface TestInfra {
   databaseUrl: string;
   sqsEndpoint: string;
   wagerQueueName: string;
+  wagerDeadLetterQueueName: string;
   eventsQueueName: string;
   pendingReferenceTtlSeconds?: number;
 }
@@ -21,6 +23,7 @@ export function testInfra(): TestInfra {
     databaseUrl: required('TEST_DATABASE_URL'),
     sqsEndpoint: required('TEST_SQS_ENDPOINT'),
     wagerQueueName: WAGER_QUEUE_NAME,
+    wagerDeadLetterQueueName: WAGER_DLQ_NAME,
     eventsQueueName: process.env.EVENTS_QUEUE_NAME ?? EVENTS_QUEUE_NAME,
   };
 }
@@ -30,26 +33,32 @@ export interface RunningApp {
   baseUrl: string;
 }
 
-export async function startApp(
-  overrides: Partial<TestInfra> = {},
-  extra: Pick<ModuleMetadata, 'controllers'> = {},
-): Promise<RunningApp> {
+export function testAppConfig(overrides: Partial<TestInfra> = {}): AppConfig {
   const infra = { ...testInfra(), ...overrides };
-
-  const config: AppConfig = {
+  return {
     port: 0,
     workerMetricsPort: 0,
     outboxPollIntervalMs: 500,
     pendingReferencePollIntervalMs: 1000,
     pendingReferenceTtlSeconds: infra.pendingReferenceTtlSeconds ?? 3600,
+    consumerRetryBaseSeconds: 1,
+    consumerConcurrency: 10,
     databaseUrl: infra.databaseUrl,
     sqs: {
       region: 'us-east-1',
       endpoint: infra.sqsEndpoint,
       wagerQueueName: infra.wagerQueueName,
+      wagerDeadLetterQueueName: infra.wagerDeadLetterQueueName,
       eventsQueueName: infra.eventsQueueName,
     },
   };
+}
+
+export async function startApp(
+  overrides: Partial<TestInfra> = {},
+  extra: Pick<ModuleMetadata, 'controllers'> = {},
+): Promise<RunningApp> {
+  const config = testAppConfig(overrides);
 
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],

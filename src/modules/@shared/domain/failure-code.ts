@@ -1,5 +1,6 @@
 export const FailureCode = {
   REQUEST_INVALID: 'REQUEST_INVALID',
+  MESSAGE_INVALID: 'MESSAGE_INVALID',
   MONEY_INVALID_FORMAT: 'MONEY_INVALID_FORMAT',
   CURRENCY_INVALID: 'CURRENCY_INVALID',
   IDEMPOTENCY_KEY_MISSING: 'IDEMPOTENCY_KEY_MISSING',
@@ -52,6 +53,7 @@ export type FailureKind = (typeof FailureKind)[keyof typeof FailureKind];
 
 const KIND_BY_CODE: Readonly<Record<FailureCode, FailureKind>> = {
   [FailureCode.REQUEST_INVALID]: FailureKind.CONTRACT,
+  [FailureCode.MESSAGE_INVALID]: FailureKind.CONTRACT,
   [FailureCode.MONEY_INVALID_FORMAT]: FailureKind.CONTRACT,
   [FailureCode.CURRENCY_INVALID]: FailureKind.CONTRACT,
   [FailureCode.IDEMPOTENCY_KEY_MISSING]: FailureKind.CONTRACT,

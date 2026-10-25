@@ -4,11 +4,14 @@ export interface AppConfig {
   outboxPollIntervalMs: number;
   pendingReferencePollIntervalMs: number;
   pendingReferenceTtlSeconds: number;
+  consumerRetryBaseSeconds: number;
+  consumerConcurrency: number;
   databaseUrl: string;
   sqs: {
     region: string;
     endpoint: string | undefined;
     wagerQueueName: string;
+    wagerDeadLetterQueueName: string;
     eventsQueueName: string;
   };
 }
@@ -25,6 +28,7 @@ type Env = Readonly<Record<string, string | undefined>>;
 const DEFAULT_PORT = 3000;
 const MAX_PORT = 65535;
 const POSTGRES_URL = /^postgres(ql)?:\/\//;
+const FIFO_QUEUE = /^[A-Za-z0-9_-]{1,75}\.fifo$/;
 
 export function loadConfig(env: Env): AppConfig {
   const problems: string[] = [];
@@ -80,19 +84,38 @@ export function loadConfig(env: Env): AppConfig {
       2_147_483_647,
       problems,
     ),
+    consumerRetryBaseSeconds: parseInteger(
+      env.CONSUMER_RETRY_BASE_SECONDS,
+      'CONSUMER_RETRY_BASE_SECONDS',
+      2,
+      1,
+      300,
+      problems,
+    ),
+    consumerConcurrency: parseInteger(
+      env.CONSUMER_CONCURRENCY,
+      'CONSUMER_CONCURRENCY',
+      10,
+      1,
+      100,
+      problems,
+    ),
     sqs: {
       region: required('AWS_REGION'),
       endpoint: env.SQS_ENDPOINT?.trim() || undefined,
       wagerQueueName: required('WAGER_QUEUE_NAME'),
+      wagerDeadLetterQueueName: required('WAGER_DLQ_NAME'),
       eventsQueueName: required('EVENTS_QUEUE_NAME'),
     },
   };
 
-  if (
-    config.sqs.eventsQueueName &&
-    !/^[A-Za-z0-9_-]{1,75}\.fifo$/.test(config.sqs.eventsQueueName)
-  ) {
-    problems.push('EVENTS_QUEUE_NAME deve ser nome de fila FIFO');
+  for (const [name, value] of [
+    ['WAGER_DLQ_NAME', config.sqs.wagerDeadLetterQueueName],
+    ['EVENTS_QUEUE_NAME', config.sqs.eventsQueueName],
+  ] as const) {
+    if (value && !FIFO_QUEUE.test(value)) {
+      problems.push(`${name} deve ser nome de fila FIFO`);
+    }
   }
 
   if (problems.length > 0) {

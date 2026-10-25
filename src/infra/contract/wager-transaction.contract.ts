@@ -22,3 +22,16 @@ export const submitWagerTransactionContract = z.strictObject({
     currency: z.string(),
   }),
 });
+
+export const wagerTransactionMessageContract = z.strictObject({
+  messageId: z.string().min(1).max(128),
+  type: z.literal('WagerTransactionRequested'),
+  occurredAt: z.iso.datetime({ offset: true }),
+  data: submitWagerTransactionContract.extend({
+    idempotencyKey: idempotencyKey.trim().min(1),
+  }),
+});
+
+export type WagerTransactionMessage = z.infer<
+  typeof wagerTransactionMessageContract
+>;

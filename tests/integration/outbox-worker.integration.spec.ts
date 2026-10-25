@@ -9,7 +9,7 @@ import {
 } from 'bun:test';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
-import { deferred, eventually } from '../support/async';
+import { eventually } from '../support/async';
 import { openTestOrm, migrateFresh } from '../support/database';
 import { testInfra } from '../support/http-app';
 import {
@@ -19,47 +19,7 @@ import {
   testSqs,
 } from '../support/outbox';
 import { freePort, spawnWorker, testAppEnv } from '../support/process';
-
-function gateSqs() {
-  const release = deferred();
-  let entered = false;
-  let stopped = false;
-
-  const server = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    fetch: async (request: Request): Promise<Response> => {
-      const body = await request.text();
-      if (
-        !entered &&
-        request.headers.get('x-amz-target')?.endsWith('.SendMessage')
-      ) {
-        entered = true;
-        await release.promise;
-      }
-      if (stopped) {
-        return new Response('indisponível', { status: 503 });
-      }
-      const headers = new Headers(request.headers);
-      headers.delete('host');
-      return fetch(testInfra().sqsEndpoint + new URL(request.url).pathname, {
-        method: request.method,
-        headers,
-        body,
-      });
-    },
-  });
-  return {
-    endpoint: 'http://127.0.0.1:' + server.port,
-    entered: () => entered,
-    release: () => release.resolve(),
-    close: async () => {
-      stopped = true;
-      release.resolve();
-      await server.stop(true);
-    },
-  };
-}
+import { gateSqs } from '../support/sqs-gate';
 
 describe('processo publicador da outbox', () => {
   let orm: MikroORM;
@@ -174,7 +134,7 @@ describe('processo publicador da outbox', () => {
 
   it('SIGKILL durante o lote libera locks e outro processo publica todos os eventos confirmados', async () => {
     const messages = await seedOutbox(orm, 5);
-    const proxy = gateSqs();
+    const proxy = gateSqs('SendMessage');
     const first = await start(proxy.endpoint);
     try {
       await eventually(async () => proxy.entered());
@@ -227,7 +187,7 @@ describe('processo publicador da outbox', () => {
     'SIGTERM conclui o lote em andamento, não começa outro e sai com zero',
     async () => {
       await seedOutbox(orm, 101);
-      const proxy = gateSqs();
+      const proxy = gateSqs('SendMessage');
       const worker = await start(proxy.endpoint);
       try {
         await eventually(async () => proxy.entered());
