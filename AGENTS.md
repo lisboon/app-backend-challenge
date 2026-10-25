@@ -172,7 +172,10 @@ Teto: verificação vermelha limita a 70; qualquer falha eliminatória do
 - Nunca reescreva o histórico do `main`. Numa branch de PR ainda não mergeada,
   reescreva só quando a revisão pedir, com `git push --force-with-lease`.
 - Não deixe commit que só corrige outro commit do mesmo PR: incorpore a correção
-  no commit original.
+  no commit original. A exceção é um defeito de comportamento encontrado por
+  revisão independente: ele vira commit próprio no topo do PR, com a reprodução
+  no corpo do commit, para a correção ficar visível na auditoria. Ajuste de
+  forma, nome ou estilo pedido na revisão continua sendo incorporado.
 - Toda afirmação do PR sobre algo verificado precisa de um teste que falhe se
   aquilo quebrar.
 - A descrição do PR segue `.github/pull_request_template.md`.
