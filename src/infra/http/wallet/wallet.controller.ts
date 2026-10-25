@@ -10,8 +10,8 @@ import {
 } from '@nestjs/common';
 
 import type { WalletUseCases } from '../../../modules/wallet/factory/wallet.factory';
-import type { ListWalletLedgerUseCaseOutputDto } from '../../../modules/wallet/usecase/list-wallet-ledger/list-wallet-ledger.usecase.dto';
-import type { ReconcileWalletUseCaseOutputDto } from '../../../modules/wallet/usecase/reconcile-wallet/reconcile-wallet.usecase.dto';
+import type { ListWalletLedgerUseCaseOutputDto } from '../../../modules/wallet/usecase/list-ledger/list-ledger.usecase.dto';
+import type { ReconcileWalletUseCaseOutputDto } from '../../../modules/wallet/usecase/reconcile/reconcile.usecase.dto';
 import type { WalletOutputDto } from '../../../modules/wallet/usecase/wallet.output.dto';
 import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';

@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 
 import { DomainError } from '../../modules/@shared/domain/errors/domain.error';
-import type { ResolvePendingWagerTransactionsUseCaseInterface } from '../../modules/wagering/usecase/resolve-pending-wager-transactions/resolve-pending-wager-transactions.usecase.dto';
+import type { ResolvePendingWagerTransactionsUseCaseInterface } from '../../modules/wagering/usecase/resolve-pending/resolve-pending.usecase.dto';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
 

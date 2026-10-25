@@ -14,7 +14,7 @@ import type {
   CreateWalletUseCaseInputDto,
   CreateWalletUseCaseInterface,
   CreateWalletUseCaseOutputDto,
-} from './create-wallet.usecase.dto';
+} from './create.usecase.dto';
 
 export class CreateWalletUseCase implements CreateWalletUseCaseInterface {
   constructor(

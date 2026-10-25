@@ -9,7 +9,7 @@ import { OpeningTransactionRepository } from '../../src/modules/wagering/reposit
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
 import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
-import { CreateWalletUseCase } from '../../src/modules/wallet/usecase/create-wallet/create-wallet.usecase';
+import { CreateWalletUseCase } from '../../src/modules/wallet/usecase/create/create.usecase';
 import type { WalletOutputDto } from '../../src/modules/wallet/usecase/wallet.output.dto';
 import {
   ledgerMatchesBalance,

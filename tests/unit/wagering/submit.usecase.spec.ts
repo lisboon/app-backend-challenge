@@ -25,8 +25,8 @@ import type {
   WalletMovement,
   WalletMovementGateway,
 } from '../../../src/modules/wagering/gateway/wallet-movement.gateway';
-import { SubmitWagerTransactionUseCase } from '../../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase';
-import type { SubmitWagerTransactionUseCaseInputDto } from '../../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase.dto';
+import { SubmitWagerTransactionUseCase } from '../../../src/modules/wagering/usecase/submit/submit.usecase';
+import type { SubmitWagerTransactionUseCaseInputDto } from '../../../src/modules/wagering/usecase/submit/submit.usecase.dto';
 import { WagerTransactionSettlement } from '../../../src/modules/wagering/usecase/wager-transaction-settlement';
 
 const at = new Date('2026-10-24T12:00:00.000Z');

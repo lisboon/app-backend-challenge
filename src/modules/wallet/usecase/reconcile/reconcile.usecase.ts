@@ -8,7 +8,7 @@ import type {
   ReconcileWalletUseCaseInputDto,
   ReconcileWalletUseCaseOutputDto,
   ReconcileWalletUseCaseInterface,
-} from './reconcile-wallet.usecase.dto';
+} from './reconcile.usecase.dto';
 
 export class ReconcileWalletUseCase implements ReconcileWalletUseCaseInterface {
   constructor(

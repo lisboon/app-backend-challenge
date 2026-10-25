@@ -14,7 +14,7 @@ import type { Response } from 'express';
 import { IdempotencyKeyMissingError } from '../../../modules/wagering/domain/errors/wagering.errors';
 import { WagerTransactionStatus } from '../../../modules/wagering/domain/wager-transaction.entity';
 import type { WageringUseCases } from '../../../modules/wagering/factory/wagering.factory';
-import type { SubmitWagerTransactionUseCaseOutputDto } from '../../../modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase.dto';
+import type { SubmitWagerTransactionUseCaseOutputDto } from '../../../modules/wagering/usecase/submit/submit.usecase.dto';
 import type { WagerTransactionOutputDto } from '../../../modules/wagering/usecase/wager-transaction.output.dto';
 import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';

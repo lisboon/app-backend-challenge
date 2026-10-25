@@ -7,7 +7,7 @@ import type { IntegrationEventJSON } from '../../src/modules/@shared/domain/even
 import type { OutboxGateway } from '../../src/modules/@shared/gateway/outbox.gateway';
 import { OutboxMessageRepository } from '../../src/modules/@shared/repository/outbox-message.repository';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
-import { SubmitWagerTransactionUseCase } from '../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase';
+import { SubmitWagerTransactionUseCase } from '../../src/modules/wagering/usecase/submit/submit.usecase';
 import { WagerTransactionSettlement } from '../../src/modules/wagering/usecase/wager-transaction-settlement';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
 import { WalletMovementRepository } from '../../src/modules/wallet/repository/wallet-movement.repository';

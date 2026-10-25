@@ -17,7 +17,7 @@ import type {
   ResolvePendingWagerTransactionsUseCaseInputDto,
   ResolvePendingWagerTransactionsUseCaseOutputDto,
   ResolvePendingWagerTransactionsUseCaseInterface,
-} from './resolve-pending-wager-transactions.usecase.dto';
+} from './resolve-pending.usecase.dto';
 
 export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWagerTransactionsUseCaseInterface {
   constructor(

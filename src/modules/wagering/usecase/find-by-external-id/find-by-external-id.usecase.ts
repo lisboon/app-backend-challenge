@@ -3,22 +3,26 @@ import { TransactionNotFoundError } from '../../domain/errors/wagering.errors';
 import type { WagerTransactionGateway } from '../../gateway/wager-transaction.gateway';
 import { toWagerTransactionOutput } from '../wager-transaction.output.dto';
 import type {
-  FindWagerTransactionByIdUseCaseInputDto,
-  FindWagerTransactionByIdUseCaseInterface,
-  FindWagerTransactionByIdUseCaseOutputDto,
-} from './find-wager-transaction-by-id.usecase.dto';
+  FindWagerTransactionByExternalIdUseCaseInputDto,
+  FindWagerTransactionByExternalIdUseCaseInterface,
+  FindWagerTransactionByExternalIdUseCaseOutputDto,
+} from './find-by-external-id.usecase.dto';
 
-export class FindWagerTransactionByIdUseCase implements FindWagerTransactionByIdUseCaseInterface {
+export class FindWagerTransactionByExternalIdUseCase implements FindWagerTransactionByExternalIdUseCaseInterface {
   constructor(
     private readonly transactions: TransactionManager,
     private readonly wagers: WagerTransactionGateway,
   ) {}
 
   async execute(
-    input: FindWagerTransactionByIdUseCaseInputDto,
-  ): Promise<FindWagerTransactionByIdUseCaseOutputDto> {
+    input: FindWagerTransactionByExternalIdUseCaseInputDto,
+  ): Promise<FindWagerTransactionByExternalIdUseCaseOutputDto> {
     const transaction = await this.transactions.execute((trx) =>
-      this.wagers.findById(input.id, trx),
+      this.wagers.findByExternalId(
+        input.providerId,
+        input.externalTransactionId,
+        trx,
+      ),
     );
     if (!transaction) {
       throw new TransactionNotFoundError();

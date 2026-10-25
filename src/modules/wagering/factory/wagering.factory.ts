@@ -7,10 +7,10 @@ import { WalletMovementRepository } from '../../wallet/repository/wallet-movemen
 import { WalletRepository } from '../../wallet/repository/wallet.repository';
 import type { PendingReferenceMonitor } from '../gateway/pending-reference-monitor.gateway';
 import { WagerTransactionRepository } from '../repository/wager-transaction.repository';
-import { FindWagerTransactionByExternalIdUseCase } from '../usecase/find-wager-transaction-by-external-id/find-wager-transaction-by-external-id.usecase';
-import { FindWagerTransactionByIdUseCase } from '../usecase/find-wager-transaction-by-id/find-wager-transaction-by-id.usecase';
-import { ResolvePendingWagerTransactionsUseCase } from '../usecase/resolve-pending-wager-transactions/resolve-pending-wager-transactions.usecase';
-import { SubmitWagerTransactionUseCase } from '../usecase/submit-wager-transaction/submit-wager-transaction.usecase';
+import { FindWagerTransactionByExternalIdUseCase } from '../usecase/find-by-external-id/find-by-external-id.usecase';
+import { FindWagerTransactionByIdUseCase } from '../usecase/find-by-id/find-by-id.usecase';
+import { ResolvePendingWagerTransactionsUseCase } from '../usecase/resolve-pending/resolve-pending.usecase';
+import { SubmitWagerTransactionUseCase } from '../usecase/submit/submit.usecase';
 import { WagerTransactionSettlement } from '../usecase/wager-transaction-settlement';
 
 export interface WageringFactoryDependencies {

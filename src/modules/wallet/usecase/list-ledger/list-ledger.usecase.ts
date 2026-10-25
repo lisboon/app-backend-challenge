@@ -6,7 +6,7 @@ import type {
   ListWalletLedgerUseCaseInputDto,
   ListWalletLedgerUseCaseOutputDto,
   ListWalletLedgerUseCaseInterface,
-} from './list-wallet-ledger.usecase.dto';
+} from './list-ledger.usecase.dto';
 
 export class ListWalletLedgerUseCase implements ListWalletLedgerUseCaseInterface {
   constructor(
