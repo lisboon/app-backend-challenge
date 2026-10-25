@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
 import { Money } from '../../src/modules/@shared/domain/money';
-
 import {
   failureOf,
   ledgerMatchesBalance,
@@ -56,11 +55,16 @@ interface TransactionRow {
 
 const insertTransaction = (em: EntityManager, tx: TransactionRow) => {
   const kind = tx.kind ?? 'OPENING';
+
   const providerId =
     tx.providerId ?? (kind === 'OPENING' ? 'internal' : 'provider-a');
+
   const status = tx.status ?? 'PROCESSED';
+
   const terminal = ['PROCESSED', 'REJECTED', 'FAILED'].includes(status);
+
   const observed = ['PROCESSED', 'REJECTED'].includes(status);
+
   const resultBalance =
     tx.resultBalance === undefined
       ? observed
@@ -226,9 +230,9 @@ describe('schema (integração com PostgreSQL real)', () => {
             .getConnection()
             .execute<{ n: string }[]>(
               `select (select count(*) from pg_tables where schemaname = 'public'
-                       and tablename in ('wallets', 'wager_transactions', 'wallet_ledger_entries'))
+                       and tablename in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages'))
                   + (select count(*) from pg_proc
-                      where proname like 'wallet%' or proname like 'wager%') as n`,
+                      where proname like 'wallet%' or proname like 'wager%' or proname like 'outbox%') as n`,
             )
         )[0].n;
 
@@ -236,7 +240,7 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(Number(await objects())).toBe(0);
 
       await orm.migrator.up();
-      expect(Number(await objects())).toBe(10);
+      expect(Number(await objects())).toBe(13);
     });
 
     it('reverter a última migration preserva rejeições gravadas em outra moeda', async () => {
@@ -255,7 +259,7 @@ describe('schema (integração com PostgreSQL real)', () => {
         }),
       );
 
-      await orm.migrator.down();
+      await orm.migrator.down({ to: 'Migration20261024000001Wallets' });
       const [{ n }] = await orm.em
         .fork()
         .getConnection()
@@ -853,6 +857,223 @@ describe('schema (integração com PostgreSQL real)', () => {
 
       expect(failure.code).toBe('23514');
       expect(failure.message).toContain(message);
+    });
+  });
+
+  describe('outbox_messages', () => {
+    const insert = (em: EntityManager, id: string) =>
+      em.execute(
+        "insert into outbox_messages (id,aggregate_id,event_type,payload,occurred_at,next_attempt_at) values (?,?,'TestEvent','{}',now(),now())",
+        [id, uuid()],
+      );
+
+    it('round-trip da migration da outbox preserva o schema anterior', async () => {
+      await orm.migrator.down({ to: 'Migration20261024000002WagerSubmit' });
+      const [absent] = await orm.em
+        .fork()
+        .execute<{ name: string | null }[]>(
+          "select to_regclass('outbox_messages')::text as name",
+        );
+      expect(absent.name).toBeNull();
+      await orm.migrator.up();
+      const [present] = await orm.em
+        .fork()
+        .execute<{ name: string | null }[]>(
+          "select to_regclass('outbox_messages')::text as name",
+        );
+      expect(present.name).toBe('outbox_messages');
+    });
+
+    it.each([
+      'id',
+      'aggregate_id',
+      'event_type',
+      'payload',
+      'occurred_at',
+      'attempts',
+      'next_attempt_at',
+    ])(
+      'recusa null em %s e confere a constraint do catálogo',
+      async (column) => {
+        const values: Record<string, unknown> = {
+          id: uuid(),
+          aggregate_id: uuid(),
+          event_type: 'TestEvent',
+          payload: '{}',
+          occurred_at: new Date(),
+          attempts: 0,
+          next_attempt_at: new Date(),
+        };
+        values[column] = null;
+        const failure = await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              'insert into outbox_messages (id,aggregate_id,event_type,payload,occurred_at,attempts,next_attempt_at) values (?,?,?,?,?,?,?)',
+              Object.values(values),
+            ),
+          ),
+        );
+        expect(failure.code).toBe('23502');
+        const name = 'outbox_messages_' + column + '_not_null';
+        expect(
+          await orm.em
+            .fork()
+            .execute<{ conname: string }[]>(
+              "select conname from pg_constraint where conrelid='outbox_messages'::regclass and contype='n' and conname=?",
+              [name],
+            ),
+        ).toEqual([{ conname: name }]);
+      },
+    );
+
+    it('sequence é identity bigint única', async () => {
+      const id = uuid();
+      await inTransaction((em) => insert(em, id));
+      const [row] = await orm.em
+        .fork()
+        .execute<{ sequence: string }[]>(
+          'select sequence::text from outbox_messages where id=?',
+          [id],
+        );
+      const failure = await failureOf(() =>
+        inTransaction((em) =>
+          em.execute(
+            "insert into outbox_messages (id,aggregate_id,event_type,payload,occurred_at,next_attempt_at,sequence) overriding system value values (?,?,'TestEvent','{}',now(),now(),?)",
+            [uuid(), uuid(), row.sequence],
+          ),
+        ),
+      );
+      expect(failure).toMatchObject({
+        code: '23505',
+        constraint: 'outbox_sequence_uk',
+      });
+      expect(
+        await orm.em.fork().execute<
+          {
+            data_type: string;
+            is_identity: string;
+            identity_generation: string;
+          }[]
+        >("select data_type,is_identity,identity_generation from information_schema.columns where table_name='outbox_messages' and column_name='sequence'"),
+      ).toEqual([
+        {
+          data_type: 'bigint',
+          is_identity: 'YES',
+          identity_generation: 'ALWAYS',
+        },
+      ]);
+    });
+
+    it('sequence não admite null e tem constraint nomeada', async () => {
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "insert into outbox_messages (id,aggregate_id,event_type,payload,occurred_at,next_attempt_at,sequence) overriding system value values (?,?,'TestEvent','{}',now(),now(),null)",
+              [uuid(), uuid()],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23502' });
+      expect(
+        await orm.em
+          .fork()
+          .execute<{ conname: string }[]>(
+            "select conname from pg_constraint where conrelid='outbox_messages'::regclass and conname='outbox_messages_sequence_not_null'",
+          ),
+      ).toEqual([{ conname: 'outbox_messages_sequence_not_null' }]);
+    });
+
+    it('recusa TRUNCATE com o nome do trigger', async () => {
+      expect(
+        await failureOf(() =>
+          inTransaction((em) => em.execute('truncate outbox_messages')),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'outbox_event_no_truncate',
+      });
+    });
+
+    it('recusa chave duplicada', async () => {
+      const id = uuid();
+      await inTransaction((em) => insert(em, id));
+      expect(
+        await failureOf(() => inTransaction((em) => insert(em, id))),
+      ).toMatchObject({ code: '23505', constraint: 'outbox_messages_pk' });
+    });
+
+    it.each([
+      ['attempts = -1', 'outbox_attempts_ck'],
+      [
+        "published_at = occurred_at - interval '1 second'",
+        'outbox_published_at_ck',
+      ],
+    ])('recusa %s', async (assignment, constraint) => {
+      const id = uuid();
+      await inTransaction((em) => insert(em, id));
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              'update outbox_messages set ' + assignment + ' where id = ?',
+              [id],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint });
+    });
+
+    it.each([
+      'id = gen_random_uuid()',
+      'aggregate_id = gen_random_uuid()',
+      "event_type = 'Outro'",
+      'payload = \'{"alterado":true}\'::jsonb',
+      "occurred_at = occurred_at + interval '1 second'",
+      'sequence = DEFAULT',
+    ])('recusa alteração do evento: %s', async (assignment) => {
+      const id = uuid();
+      await inTransaction((em) => insert(em, id));
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              'update outbox_messages set ' + assignment + ' where id = ?',
+              [id],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'outbox_event_immutable' });
+    });
+
+    it('recusa DELETE', async () => {
+      const id = uuid();
+      await inTransaction((em) => insert(em, id));
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute('delete from outbox_messages where id = ?', [id]),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'outbox_event_immutable' });
+    });
+
+    it('permite atualizar somente os metadados de publicação', async () => {
+      const id = uuid();
+      await inTransaction((em) => insert(em, id));
+      await inTransaction((em) =>
+        em.execute(
+          "update outbox_messages set attempts=1,next_attempt_at=now()+interval '1 second',published_at=now(),last_error='TimeoutError' where id=?",
+          [id],
+        ),
+      );
+      const [row] = await orm.em
+        .fork()
+        .execute<{ attempts: number; last_error: string }[]>(
+          'select attempts,last_error from outbox_messages where id=?',
+          [id],
+        );
+      expect(row).toEqual({ attempts: 1, last_error: 'TimeoutError' });
     });
   });
 });

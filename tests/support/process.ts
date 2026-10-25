@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 
-import { testInfra, WAGER_QUEUE_NAME } from './http-app';
+import { testInfra, WAGER_QUEUE_NAME, EVENTS_QUEUE_NAME } from './http-app';
 
 const ROOT = resolve(__dirname, '../..');
 const MAIN = 'src/infra/http/main.ts';
@@ -15,6 +15,7 @@ export function freePort(): number {
     port: 0,
     socket: { data: () => undefined },
   });
+
   const { port } = probe;
   probe.stop(true);
   return port;
@@ -30,6 +31,7 @@ export function testAppEnv(port: number): Record<string, string> {
     AWS_SECRET_ACCESS_KEY: 'test',
     SQS_ENDPOINT: infra.sqsEndpoint,
     WAGER_QUEUE_NAME,
+    EVENTS_QUEUE_NAME,
   };
 }
 
@@ -54,4 +56,13 @@ export async function waitReady(port: number): Promise<void> {
     await Bun.sleep(200);
   }
   throw new Error(`a app não ficou pronta em ${BOOT_TIMEOUT_MS}ms`);
+}
+
+export function spawnWorker(env: Record<string, string>) {
+  return Bun.spawn(['bun', '--no-env-file', 'src/infra/worker/main.ts'], {
+    cwd: ROOT,
+    env: { PATH: process.env.PATH ?? '', ...env },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
 }

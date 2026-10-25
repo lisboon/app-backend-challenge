@@ -1,3 +1,8 @@
+import type { EventContext } from '../../../@shared/domain/event/integration-event';
+import { OutboxMessage } from '../../../@shared/domain/outbox/outbox-message.entity';
+import type { OutboxGateway } from '../../../@shared/gateway/outbox.gateway';
+import { WagerTransactionProcessed } from '../../event/wager-transaction-processed.event';
+import { WagerTransactionRejected } from '../../event/wager-transaction-rejected.event';
 import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
 import { Money } from '../../../@shared/domain/money';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
@@ -12,6 +17,7 @@ import type { WagerTransactionGateway } from '../../gateway/wager-transaction.ga
 import type {
   LockedWallet,
   WalletMovementGateway,
+  WalletMovementResult,
 } from '../../gateway/wallet-movement.gateway';
 import type {
   SubmitWagerTransactionUseCaseInputDto,
@@ -26,6 +32,7 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
     private readonly wallets: WalletMovementGateway,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly outbox: OutboxGateway,
   ) {}
 
   async execute(
@@ -71,8 +78,18 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
       if (recorded) {
         return this.replay(recorded, candidate);
       }
-      await this.settle(candidate, wallet);
+      const context: EventContext = {
+        eventId: this.ids.next(),
+        correlationId: input.correlationId,
+        occurredAt: this.clock.now(),
+      };
+      const movement = await this.settle(candidate, wallet, context);
       await this.wagers.create(candidate, trx);
+      const event = candidate.failureCode
+        ? WagerTransactionRejected.from(candidate, context)
+        : WagerTransactionProcessed.from(candidate, context);
+      await this.outbox.create(OutboxMessage.enqueue(event), trx);
+      await movement?.recordBalanceChanged();
       return toOutput(candidate, false);
     });
   }
@@ -90,23 +107,31 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
   private async settle(
     candidate: WagerTransaction,
     wallet: LockedWallet,
-  ): Promise<void> {
-    const at = candidate.createdAt;
+    context: EventContext,
+  ): Promise<WalletMovementResult | null> {
+    const at = context.occurredAt;
     const rejection = candidate.rejectionFor(wallet);
     if (rejection) {
       candidate.reject(rejection, wallet.balance, at);
-      return;
+      return null;
     }
-    const balance = candidate.affectsBalance()
+    const movement = candidate.affectsBalance()
       ? await wallet.apply({
+          eventContext: {
+            eventId: this.ids.next(),
+            correlationId: context.correlationId,
+            causationId: context.eventId,
+            occurredAt: at,
+          },
           transactionId: candidate.id,
           entryId: this.ids.next(),
           direction: candidate.ledgerDirectionFor(),
           money: candidate.money,
           at,
         })
-      : wallet.balance;
-    candidate.markProcessed(balance, at);
+      : null;
+    candidate.markProcessed(movement?.balance ?? wallet.balance, at);
+    return movement;
   }
 }
 

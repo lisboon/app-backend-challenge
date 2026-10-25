@@ -49,6 +49,7 @@ async function createQueue(
       maxReceiveCount: options.maxReceiveCount ?? 2,
     });
   }
+
   const { QueueUrl } = await sqs.send(
     new CreateQueueCommand({
       QueueName: `${name}-${run}.fifo`,
@@ -109,6 +110,17 @@ afterAll(() => {
 });
 
 describe('filas provisionadas pelo hook do LocalStack', () => {
+  it('a fila de eventos é FIFO sem deduplicação por conteúdo', async () => {
+    const { QueueUrl } = await sqs.send(
+      new GetQueueUrlCommand({ QueueName: testInfra().eventsQueueName }),
+    );
+    const { Attributes } = await sqs.send(
+      new GetQueueAttributesCommand({ QueueUrl, AttributeNames: ['All'] }),
+    );
+    expect(Attributes!.FifoQueue).toBe('true');
+    expect(Attributes!.ContentBasedDeduplication).toBe('false');
+  });
+
   it('a fila principal é FIFO e redireciona para a DLQ FIFO após 5 recebimentos', async () => {
     const { QueueUrl } = await sqs.send(
       new GetQueueUrlCommand({ QueueName: WAGER_QUEUE_NAME }),

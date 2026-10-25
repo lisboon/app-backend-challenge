@@ -1,4 +1,5 @@
 import type { TransactionManager } from '../../@shared/domain/transaction/transaction-manager';
+import { OutboxRepository } from '../../@shared/repository/outbox.repository';
 import type { Clock } from '../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../@shared/gateway/id-generator.gateway';
 import { OpeningTransactionRepository } from '../../wagering/repository/opening-transaction.repository';
@@ -29,6 +30,7 @@ export const WalletFactory = {
   create(dependencies: WalletFactoryDependencies): WalletUseCases {
     const wallets = new WalletRepository();
     const ledger = new LedgerRepository();
+    const outbox = new OutboxRepository();
     return {
       reconcile: new ReconcileWalletUseCase(
         dependencies.transactions,
@@ -45,9 +47,13 @@ export const WalletFactory = {
         dependencies.transactions,
         wallets,
         ledger,
-        new OpeningTransactionRepository(new WagerTransactionRepository()),
+        new OpeningTransactionRepository(
+          new WagerTransactionRepository(),
+          outbox,
+        ),
         dependencies.ids,
         dependencies.clock,
+        outbox,
       ),
       findById: new FindWalletByIdUseCase(dependencies.transactions, wallets),
     };

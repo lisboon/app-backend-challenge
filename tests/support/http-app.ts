@@ -6,11 +6,13 @@ import { APP_CONFIG } from '../../src/infra/config/config.module';
 import { AppModule } from '../../src/infra/http/app.module';
 
 export const WAGER_QUEUE_NAME = 'wager-transactions.fifo';
+export const EVENTS_QUEUE_NAME = 'wallet-events.fifo';
 
 export interface TestInfra {
   databaseUrl: string;
   sqsEndpoint: string;
   wagerQueueName: string;
+  eventsQueueName: string;
 }
 
 export function testInfra(): TestInfra {
@@ -18,6 +20,7 @@ export function testInfra(): TestInfra {
     databaseUrl: required('TEST_DATABASE_URL'),
     sqsEndpoint: required('TEST_SQS_ENDPOINT'),
     wagerQueueName: WAGER_QUEUE_NAME,
+    eventsQueueName: process.env.EVENTS_QUEUE_NAME ?? EVENTS_QUEUE_NAME,
   };
 }
 
@@ -31,15 +34,20 @@ export async function startApp(
   extra: Pick<ModuleMetadata, 'controllers'> = {},
 ): Promise<RunningApp> {
   const infra = { ...testInfra(), ...overrides };
+
   const config: AppConfig = {
     port: 0,
+    workerMetricsPort: 0,
+    outboxPollIntervalMs: 500,
     databaseUrl: infra.databaseUrl,
     sqs: {
       region: 'us-east-1',
       endpoint: infra.sqsEndpoint,
       wagerQueueName: infra.wagerQueueName,
+      eventsQueueName: infra.eventsQueueName,
     },
   };
+
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
     controllers: extra.controllers ?? [],
@@ -47,6 +55,7 @@ export async function startApp(
     .overrideProvider(APP_CONFIG)
     .useValue(config)
     .compile();
+
   const app = moduleRef.createNestApplication({ logger: false });
   await app.listen(0);
   return { app, baseUrl: await app.getUrl() };

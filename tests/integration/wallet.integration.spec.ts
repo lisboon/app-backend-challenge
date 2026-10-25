@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { FailureCode } from '../../src/modules/@shared/domain/failure-code';
 import { OpeningTransactionRepository } from '../../src/modules/wagering/repository/opening-transaction.repository';
@@ -368,13 +369,21 @@ describe('wallets (integração HTTP com PostgreSQL real)', () => {
         new MikroOrmTransactionManager(orm),
         new WalletRepository(),
         failingLedger,
-        new OpeningTransactionRepository(new WagerTransactionRepository()),
+        new OpeningTransactionRepository(
+          new WagerTransactionRepository(),
+          new OutboxRepository(),
+        ),
         { next: uuid },
         { now: () => new Date() },
+        new OutboxRepository(),
       );
 
       const failure = await useCase
-        .execute({ playerId, initialBalance: brl('100.00') })
+        .execute({
+          playerId,
+          initialBalance: brl('100.00'),
+          correlationId: uuid(),
+        })
         .then(
           () => undefined,
           (error: unknown) => error,

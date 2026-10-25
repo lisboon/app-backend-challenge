@@ -19,7 +19,8 @@
     "test:e2e": "bun test tests/e2e",
     "test:integration": "bun test --timeout 30000 tests/integration",
     "infra:test:up": "docker compose --profile test up -d --wait postgres-test sqs-test",
-    "infra:test:down": "docker compose --profile test rm -sfv postgres-test sqs-test"
+    "infra:test:down": "docker compose --profile test rm -sfv postgres-test sqs-test",
+    "start:worker": "bun run src/infra/worker/main.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "3.1149.0",

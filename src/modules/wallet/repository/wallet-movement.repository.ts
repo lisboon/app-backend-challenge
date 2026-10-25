@@ -1,10 +1,13 @@
-import type { Money } from '../../@shared/domain/money';
+import { OutboxMessage } from '../../@shared/domain/outbox/outbox-message.entity';
+import type { OutboxGateway } from '../../@shared/gateway/outbox.gateway';
+import { WalletBalanceChanged } from '../event/wallet-balance-changed.event';
 import type { TransactionContext } from '../../@shared/domain/transaction/transaction-manager';
 import { MovementDirection } from '../../wagering/domain/wager-transaction.entity';
 import type {
   LockedWallet,
   WalletMovement,
   WalletMovementGateway,
+  WalletMovementResult,
 } from '../../wagering/gateway/wallet-movement.gateway';
 import type { Wallet } from '../domain/wallet.entity';
 import type { LedgerGateway } from '../gateway/ledger.gateway';
@@ -14,6 +17,7 @@ export class WalletMovementRepository implements WalletMovementGateway {
   constructor(
     private readonly wallets: WalletGateway,
     private readonly ledger: LedgerGateway,
+    private readonly outbox: OutboxGateway,
   ) {}
 
   async lock(
@@ -37,7 +41,7 @@ export class WalletMovementRepository implements WalletMovementGateway {
     wallet: Wallet,
     movement: WalletMovement,
     trx: TransactionContext,
-  ): Promise<Money> {
+  ): Promise<WalletMovementResult> {
     const expectedVersion = wallet.version;
     const props = {
       entryId: movement.entryId,
@@ -51,6 +55,15 @@ export class WalletMovementRepository implements WalletMovementGateway {
         : wallet.credit(props);
     await this.wallets.update(wallet, expectedVersion, trx);
     await this.ledger.create(entry, trx);
-    return wallet.balance;
+    return {
+      balance: wallet.balance,
+      recordBalanceChanged: () =>
+        this.outbox.create(
+          OutboxMessage.enqueue(
+            WalletBalanceChanged.from(wallet, entry, movement.eventContext),
+          ),
+          trx,
+        ),
+    };
   }
 }

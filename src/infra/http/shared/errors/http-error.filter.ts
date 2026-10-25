@@ -4,6 +4,7 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
+  Inject,
   Logger,
 } from '@nestjs/common';
 import { Response } from 'express';
@@ -14,6 +15,9 @@ import {
   FailureKind,
   failureKindOf,
 } from '../../../../modules/@shared/domain/failure-code';
+import type { IdGenerator } from '../../../../modules/@shared/gateway/id-generator.gateway';
+import { ID_GENERATOR } from '../../../runtime/runtime.module';
+import { resolveCorrelationId, type CorrelatedRequest } from '../correlation';
 import { HttpErrorResponseDto } from './error.response.dto';
 
 const STATUS_BY_KIND: Readonly<Record<FailureKind, HttpStatus>> = {
@@ -35,9 +39,18 @@ const STACK_FRAME = /^\s+at\s/;
 export class HttpErrorFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpErrorFilter.name);
 
+  constructor(@Inject(ID_GENERATOR) private readonly ids: IdGenerator) {}
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const body = this.toBody(exception);
     const response = host.switchToHttp().getResponse<Response>();
+    if (!response.hasHeader('X-Correlation-Id')) {
+      const request = host.switchToHttp().getRequest<CorrelatedRequest>();
+      response.setHeader(
+        'X-Correlation-Id',
+        resolveCorrelationId(request, this.ids),
+      );
+    }
     if (failureKindOf(body.failureCode) === FailureKind.TRANSIENT) {
       response.setHeader('Retry-After', RETRY_AFTER_SECONDS);
     }

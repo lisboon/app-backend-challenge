@@ -3,6 +3,7 @@ import type { BaseUseCase } from '../../../@shared/usecase/base.usecase';
 import type { WalletOutputDto } from '../wallet.output.dto';
 
 export interface CreateWalletUseCaseInputDto {
+  correlationId: string;
   playerId: string;
   initialBalance: MoneyProps;
 }

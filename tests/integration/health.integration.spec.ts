@@ -76,6 +76,16 @@ describe('health (integração com PostgreSQL e LocalStack reais)', () => {
     });
   });
 
+  it('ready também recusa a fila de eventos ausente', async () => {
+    const { baseUrl } = await boot({
+      eventsQueueName: 'eventos-inexistentes.fifo',
+    });
+    expect(await ready(baseUrl)).toEqual({
+      status: 503,
+      body: { status: 'down', checks: { postgres: 'up', sqs: 'down' } },
+    });
+  });
+
   it('loga a dependência e o código do erro sem expor a URL de conexão', async () => {
     const warnings: string[] = [];
     const spy = spyOn(Logger.prototype, 'warn').mockImplementation(

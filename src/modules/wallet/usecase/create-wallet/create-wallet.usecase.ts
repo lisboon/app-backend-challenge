@@ -1,3 +1,6 @@
+import { OutboxMessage } from '../../../@shared/domain/outbox/outbox-message.entity';
+import type { OutboxGateway } from '../../../@shared/gateway/outbox.gateway';
+import { WalletBalanceChanged } from '../../event/wallet-balance-changed.event';
 import { Money } from '../../../@shared/domain/money';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
@@ -21,6 +24,7 @@ export class CreateWalletUseCase implements CreateWalletUseCaseInterface {
     private readonly openings: OpeningTransactionGateway,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly outbox: OutboxGateway,
   ) {}
 
   async execute(
@@ -39,8 +43,14 @@ export class CreateWalletUseCase implements CreateWalletUseCaseInterface {
     await this.transactions.execute(async (trx) => {
       await this.wallets.create(wallet, trx);
       if (openingEntry) {
+        const processedEventId = this.ids.next();
         await this.openings.create(
           {
+            eventContext: {
+              eventId: processedEventId,
+              correlationId: input.correlationId,
+              occurredAt: at,
+            },
             id: openingEntry.transactionId,
             walletId: wallet.id,
             playerId: wallet.playerId,
@@ -50,6 +60,17 @@ export class CreateWalletUseCase implements CreateWalletUseCaseInterface {
           trx,
         );
         await this.ledger.create(openingEntry, trx);
+        await this.outbox.create(
+          OutboxMessage.enqueue(
+            WalletBalanceChanged.from(wallet, openingEntry, {
+              eventId: this.ids.next(),
+              correlationId: input.correlationId,
+              causationId: processedEventId,
+              occurredAt: at,
+            }),
+          ),
+          trx,
+        );
       }
     });
 

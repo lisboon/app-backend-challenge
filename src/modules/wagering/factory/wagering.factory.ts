@@ -1,4 +1,5 @@
 import type { TransactionManager } from '../../@shared/domain/transaction/transaction-manager';
+import { OutboxRepository } from '../../@shared/repository/outbox.repository';
 import type { Clock } from '../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../@shared/gateway/id-generator.gateway';
 import { LedgerRepository } from '../../wallet/repository/ledger.repository';
@@ -24,6 +25,7 @@ export interface WageringUseCases {
 export const WageringFactory = {
   create(dependencies: WageringFactoryDependencies): WageringUseCases {
     const wagers = new WagerTransactionRepository();
+    const outbox = new OutboxRepository();
     return {
       submit: new SubmitWagerTransactionUseCase(
         dependencies.transactions,
@@ -31,9 +33,11 @@ export const WageringFactory = {
         new WalletMovementRepository(
           new WalletRepository(),
           new LedgerRepository(),
+          outbox,
         ),
         dependencies.ids,
         dependencies.clock,
+        outbox,
       ),
       findById: new FindWagerTransactionByIdUseCase(
         dependencies.transactions,
