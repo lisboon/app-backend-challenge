@@ -118,10 +118,10 @@ erro tem o mesmo envelope `{ statusCode, failureCode, message }`:
   HTTP precisa distinguir. Com 201 para aplicada e para rejeitada, só o corpo
   distinguiria. O submit vai responder 422 com o corpo da transação
   (`transactionId`, `status`, `failureCode`), que continua consultável por
-  `GET`. Aceite pendente (`PENDING_REFERENCE`) vai ser 202.
+  `GET`. Aceite pendente (`PENDING_REFERENCE`) responde 202.
 - **`REFERENCE_NOT_FOUND` é `BUSINESS`.** Pela seção 7.1, a referência ausente
   primeiro fica `PENDING_REFERENCE` e só vira rejeição terminal depois do TTL.
-- **`CURRENCY_MISMATCH` e `MONEY_OUT_OF_RANGE` são `BUSINESS`.** Os dois só
+- **`CURRENCY_MISMATCH` e `BALANCE_LIMIT_EXCEEDED` são `BUSINESS`.** Os dois só
   surgem de payload bem-formado aplicado a uma wallet (moeda diferente, crédito
   que estouraria a faixa). Entrada fora da faixa já é recusada pelo formato
   (`MONEY_INVALID_FORMAT`).
@@ -247,7 +247,7 @@ cada um tem um teste que o viola por SQL cru
 | sem atualização perdida | `UNIQUE (wallet_id, wallet_version)` |
 | ledger imutável | trigger que recusa `UPDATE`, `DELETE` e `TRUNCATE` (`P0001`) |
 | lançamento só existe para transação aplicada que move saldo | trigger diferido: a transação está `PROCESSED` e não é `LOSS`, e valor, moeda e player batem com ela e com a wallet |
-| direção coerente com o tipo | o mesmo trigger: `BET` debita; `OPENING`, `WIN` e `REFUND` creditam |
+| direção coerente com o tipo | `wallet_ledger_entries_match_transaction`: `BET` debita; `OPENING`, `WIN` e `REFUND` creditam; `ROLLBACK` inverte a direção do lançamento referenciado |
 | transação aplicada que move saldo tem lançamento | trigger diferido em `wager_transactions` |
 | desfecho registra o saldo observado | `CHECK`: `PROCESSED` e `REJECTED` têm `result_balance` e `result_currency`, pendente não tem |
 | `BET` e `WIN` têm valor positivo | `CHECK (kind = 'LOSS' or amount > 0)` |
@@ -260,6 +260,15 @@ cada um tem um teste que o viola por SQL cru
 | evento persistido imutável | trigger `outbox_event_immutable`: recusa alteração de id, agregado, tipo, payload, ocorrência e sequence, e recusa `DELETE` |
 | outbox não pode ser truncada | trigger de statement `outbox_event_no_truncate` |
 | tentativas não negativas e publicação posterior à ocorrência | `outbox_attempts_ck` e `outbox_published_at_ck` |
+
+| identidade da wallet imutável | trigger `wallets_protect` recusa mudar id, player e moeda (23514) |
+| transação auditável e terminal imutável | `wager_transactions_protect` recusa DELETE, UPDATE terminal, alteração de identidade e transição inválida; `wager_transactions_no_truncate` recusa TRUNCATE (23514) |
+| referência interna somente no desfecho aplicado com referência externa | `wager_tx_reference_state_ck` |
+| referência pertence à mesma wallet | FK composta `wager_tx_reference_wallet_fk` |
+| referência processada, compatível em tipo, identidade e valor da reversão | trigger diferido `wager_transactions_reference_valid` (23514) |
+| reversão única por tipo e referência | índice parcial `wager_tx_single_reversal_uk` (23505) |
+| BET revertido uma única vez em termos líquidos | trigger diferido `wager_transactions_single_net_reversal` (23514) |
+| tentativas não negativas, próxima tentativa somente em pendência, referência proibida em BET/LOSS/OPENING | `wager_tx_reference_attempts_ck`, `wager_tx_pending_reference_ck` e `wager_tx_reference_not_allowed_ck` |
 
 **Interpretações adotadas:**
 
@@ -294,6 +303,7 @@ aparece nos dois casos:
 | `23505` na constraint `wallets_player_currency_uk` | `WALLET_ALREADY_EXISTS` (409) |
 | `23505` em `wager_tx_idempotency_uk` | nova tentativa do submit, que encontra a transação gravada (seção 8) |
 | `23505` em `wager_tx_external_uk` | `EXTERNAL_TRANSACTION_CONFLICT` (409) |
+| `23505` em `wager_tx_single_reversal_uk` | `REFERENCE_ALREADY_REVERSED`; o submit refaz uma tentativa e registra a rejeição de negócio (422) |
 | `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `57P01`–`57P03`, timeout de conexão do pool, `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
 | qualquer outro | 500, porque é defeito, não condição de negócio |
 
@@ -345,11 +355,11 @@ O módulo global de observabilidade fornece um `Registry` próprio do
 métricas automáticas. `GET /metrics` usa o content type desse registro.
 O contador é local ao processo e reinicia com ele; o Prometheus agrega as
 instâncias. As métricas da outbox estão na seção 9. As demais métricas da seção
-12 acompanham os próximos incrementos de consumo, referências pendentes e inbox.
+12 acompanham os próximos incrementos de consumo e inbox. As referências pendentes estão na seção 10.
 
 ## 8. Submissão de transações de aposta
 
-`POST /wagering/transactions` aceita `BET`, `WIN` e `LOSS`, com o header
+`POST /wagering/transactions` aceita `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`, com o header
 `Idempotency-Key` obrigatório. Tudo acontece numa transação SQL:
 
 1. trava a wallet com `SELECT ... FOR UPDATE`; wallet inexistente é `404`, sem
@@ -357,8 +367,8 @@ instâncias. As métricas da outbox estão na seção 9. As demais métricas da 
 2. procura a chave em `(provider_id, idempotency_key)`. Se existe, o payload é
    comparado pelo `payloadHash`: igual devolve o resultado gravado com
    `idempotentReplay: true`; diferente é `IDEMPOTENCY_PAYLOAD_CONFLICT` (409);
-3. avalia as regras contra a wallet travada: player dono, moeda e, para `BET`,
-   saldo suficiente;
+3. resolve a referência por provedor e id externo e avalia as regras contra a
+   wallet travada, na precedência descrita na seção 10;
 4. aplica o movimento pelo agregado `Wallet` (`debit` ou `credit`), grava a
    wallet condicionada à versão lida e o lançamento; `LOSS` não move saldo;
 5. grava a transação com o desfecho, o saldo observado e o evento na outbox.
@@ -383,15 +393,18 @@ reenvia com a mesma chave.
 |---|---|---|
 | aplicada | `201` | `{ transactionId, status: "PROCESSED", failureCode: null, balance, idempotentReplay }` |
 | rejeitada por regra de negócio | `422` | o mesmo corpo com `status: "REJECTED"` e o `failureCode` |
-| reenvio | o mesmo do original | o corpo original com `idempotentReplay: true` |
+| referência pendente | `202` | `{ transactionId, status: "PENDING_REFERENCE", failureCode: null, balance: null, idempotentReplay }` |
+| reenvio | o do estado atual | o desfecho persistido com `idempotentReplay: true` |
 
 **`payloadHash`.** `v1:` seguido do SHA-256 em hexadecimal do JSON canônico
 de `{ providerId, externalTransactionId, walletId, playerId, roundId, gameId,
-kind, money: { amount, currency } }`: chaves ordenadas por código UTF-16 em
+kind, money: { amount, currency }, referenceExternalTransactionId? }`: chaves ordenadas por código UTF-16 em
 todos os níveis, sem espaços, campos ausentes omitidos. O header
 `Idempotency-Key`, o id interno e as datas não entram. Como `amount` só aceita
 uma grafia por quantia (seção 2), o mesmo pedido gera sempre o mesmo hash.
 O prefixo de versão permite trocar o algoritmo sem confundir hashes antigos.
+A referência participa somente quando presente; hashes antigos sem referência
+são preservados, com valores fixos calculados no main cobertos por testes.
 
 `balance` é o saldo observado no desfecho e fica gravado na transação
 (`result_balance`, `result_currency`). O reenvio devolve esse valor, não o
@@ -400,12 +413,14 @@ saldo atual, porque responde ao pedido original.
 **Interpretações adotadas:**
 
 - **Rejeições de negócio são gravadas.** `INSUFFICIENT_BALANCE`,
-  `CURRENCY_MISMATCH` e `WALLET_PLAYER_MISMATCH` viram transações `REJECTED`,
+  `CURRENCY_MISMATCH`, `WALLET_PLAYER_MISMATCH`, `BALANCE_LIMIT_EXCEEDED` e as
+  falhas de referência da seção 10 viram transações `REJECTED`,
   consultáveis e idempotentes. Por isso a transação referencia só a wallet; a
   coerência de player e moeda com o ledger é garantida pelos triggers da
   seção 5.
 - **Erros de contrato não são gravados.** Payload inválido, `OPENING`, valor
-  zero em `BET` ou `WIN` e chave ausente respondem `400` antes da transação.
+  zero em operações financeiras, provider reservado `internal`, referência
+  obrigatória ausente ou proibida e chave ausente respondem `400` antes da transação.
 - **`LOSS` aceita valor zero.** Ele só registra o fim da rodada.
 - **Idempotência por provedor.** A mesma chave em provedores diferentes são
   transações distintas.
@@ -414,16 +429,18 @@ saldo atual, porque responde ao pedido original.
   255, com espaços nas pontas removidos. As colunas são `text`; o limite
   protege índices e logs, e quem passa dele recebe `400`.
 
-**Limitações:** `REFUND`, `ROLLBACK`, referências pendentes, consumo pela fila
-e inbox entram nos próximos incrementos.
+**Limitações:** consumo pela fila de entrada, inbox e recuperação para `FAILED`
+em falhas persistentes entram no próximo incremento. Uma referência existente
+que não pode ser aplicada continua pendente, mesmo após o TTL; o operador deve
+acompanhar retries e resolver a causa.
 
 ## 9. Outbox
 
 O envelope é uma classe abstrata `IntegrationEvent<T>`. Cada evento define seu
-tipo e versão: `WagerTransactionProcessed`, `WagerTransactionRejected` e
-`WalletBalanceChanged`, todos na versão 1. Os dados contêm `MoneyProps`, com
+tipo e versão: `WagerTransactionProcessed`, `WagerTransactionRejected`,
+`WagerTransactionPendingReference` e `WalletBalanceChanged`, todos na versão 1. Os dados contêm `MoneyProps`, com
 valores em string; a ocorrência é serializada em ISO-8601. Abertura, `BET`,
-`WIN` e `LOSS` aplicados geram o evento processado. Rejeição gera somente o
+`WIN`, `LOSS`, `REFUND` e `ROLLBACK` aplicados geram o evento processado. Rejeição gera somente o
 evento rejeitado. Só alterações de saldo geram `WalletBalanceChanged`.
 
 O input dos casos de uso recebe `correlationId`. A borda HTTP preserva um UUID
@@ -554,3 +571,148 @@ somente com a outbox drenada: o `down` derruba a coluna `sequence`, e o `up`
 a recria como identity, reatribuindo os valores sem preservar explicitamente
 a ordem anterior. Com eventos pendentes, a ordem de publicação pode passar
 a depender da ordem física das linhas.
+
+## 10. Reversões e referências pendentes
+
+### Referências, reversão única e precedência
+
+A referência é resolvida por `(providerId, referenceExternalTransactionId)`.
+`REFUND` exige `BET`; `ROLLBACK` exige `BET`, `WIN` ou `REFUND`. `WIN` pode
+referenciar `BET`, mas também continua funcionando sem referência. Player,
+wallet, moeda e rodada precisam coincidir. Referência `REJECTED` é recusada;
+referência inexistente ou ainda `PENDING_REFERENCE` deixa a operação pendente.
+Somente `PROCESSED` pode ser aplicada. `OPENING` nunca serve como referência.
+
+A referência externa é obrigatória em `REFUND`/`ROLLBACK` e opcional em `WIN`.
+Interpretamos que é proibida em `BET` e `LOSS`, pois o enunciado não define
+referência para esses tipos. Falhas de contrato não gravam transação:
+`REFERENCE_REQUIRED`, `REFERENCE_NOT_ALLOWED` e `PROVIDER_RESERVED` são 400.
+O identificador `internal` pertence exclusivamente à abertura de wallet.
+
+A primeira falha determina o desfecho, nesta ordem:
+
+1. Player dono e moeda da wallet: `WALLET_PLAYER_MISMATCH` e `CURRENCY_MISMATCH`.
+2. Tipo da referência: `REFERENCE_KIND_INVALID`.
+3. Identidade da referência: `REFERENCE_MISMATCH`.
+4. Estado da referência: `REFERENCE_NOT_PROCESSED` ou espera.
+5. Reversão já aplicada: `REFERENCE_ALREADY_REVERSED`.
+6. Valor diferente do original: `REVERSAL_AMOUNT_MISMATCH`.
+7. Saldo e limite: `INSUFFICIENT_BALANCE` para BET,
+   `REVERSAL_INSUFFICIENT_BALANCE` para débito de reversão e
+   `BALANCE_LIMIT_EXCEEDED` para qualquer crédito acima de NUMERIC(20,2).
+
+Todas as falhas de negócio são 422, persistidas e consultáveis, com evento de
+rejeição e o saldo observado. O estouro é avaliado antes da aplicação do
+movimento, para não perder o registro de auditoria por exceção aritmética.
+`REFERENCE_NOT_FOUND` também é negócio, exclusivamente na expiração descrita
+abaixo. WIN com referência não exige valor igual e não tem limite de quantidade.
+
+REFUND credita o mesmo valor do BET. ROLLBACK inverte a direção da referência:
+BET gera crédito; WIN e REFUND geram débito. A validação de domínio usa o tipo;
+a defesa SQL exige a direção inversa do lançamento real da referência.
+
+Uma referência aceita no máximo uma reversão processada de cada tipo. Além
+disso, um BET não pode ter simultaneamente ROLLBACK e REFUND ainda não desfeito.
+Um REFUND desfeito por ROLLBACK do próprio REFUND deixa de contar na reversão
+líquida; isso não permite outro REFUND do mesmo BET. Não se reverte ROLLBACK.
+
+| Sequência com saldo inicial 100 e BET de 25 | Conta e desfecho |
+|---|---|
+| BET → REFUND → ROLLBACK(BET) | 100 → 75 → 100; último rejeitado, pois levaria a 125 |
+| BET → ROLLBACK(BET) → REFUND | 100 → 75 → 100; último rejeitado |
+| BET → REFUND → ROLLBACK(REFUND) → ROLLBACK(BET) | 100 → 75 → 100 → 75 → 100; aceita |
+
+### Estados, persistência e aplicação compartilhada
+
+A tabela é fechada; qualquer outra transição é erro de programação
+`InvalidTransactionStateError`, convertido em 500, sem código de negócio.
+
+| Estado atual | Próximos estados |
+|---|---|
+| `PENDING` | `PROCESSED`, `REJECTED`, `PENDING_REFERENCE` |
+| `PENDING_REFERENCE` | `PROCESSED`, `REJECTED` |
+| `PROCESSED` | nenhum |
+| `REJECTED` | nenhum |
+
+Retries atualizam somente metadados de uma pendente, sem transição de estado.
+O trigger SQL permite essa atualização, mas recusa mudança de identidade,
+DELETE de qualquer transação e todo UPDATE terminal, inclusive sem alteração.
+A identidade é tudo exceto status, falha, saldo observado, referência interna,
+tentativas, próxima tentativa e processed_at. TRUNCATE tem proteção de statement.
+A wallet preserva id, player e moeda. `FAILED` permanece fora do domínio deste
+incremento; linhas legadas nesse estado também são protegidas como terminais.
+
+`WagerTransaction.rejectionFor` concentra as regras. `WagerTransactionSettlement`
+é o colaborador de submit e `ResolvePendingWagerTransactionsUseCase`: resolve
+a referência, aplica wallet/ledger e registra o desfecho e a outbox no mesmo
+contexto transacional. Submit insere; resolver atualiza. Não há segundo caminho
+financeiro no worker. O lock da wallet serializa as reversões concorrentes.
+As proteções SQL da seção 5 continuam sendo a última defesa, inclusive para SQL
+direto. A migration é reversível e seu round-trip é testado com dados.
+
+A coluna `correlation_id` preserva a requisição original. O backfill de linhas
+anteriores usa o próprio id da transação, pois a correlação original não estava
+persistida. O worker reutiliza esse valor nos eventos de resolução. Ambos os
+identificadores de referência aparecem no GET; o interno fica preenchido
+somente em uma transação processada que tenha referência externa.
+
+O primeiro aceite pendente responde 202, com saldo e failureCode nulos, e grava
+`WagerTransactionPendingReference` v1. Replays mostram o estado atual: 202 enquanto
+pendente, 201 após aplicação ou 422 após rejeição. O saldo terminal é o observado
+na resolução, preservado em replays mesmo após novas operações na wallet.
+Reprocessamento sem mudança de status não gera evento; aplicação gera
+`WagerTransactionProcessed` e depois `WalletBalanceChanged`, com causationId do
+processado. Rejeição ou expiração gera `WagerTransactionRejected`.
+
+### Prazo, concorrência e recuperação
+
+O TTL padrão é uma hora desde createdAt, configurável em
+`PENDING_REFERENCE_TTL_SECONDS` (3600). É uma janela operacional escolhida para
+permitir retries e atrasos dos provedores sem deixar indefinidamente um saldo
+diferente do esperado e sem reprocessamento ilimitado de referências ausentes.
+Não representa um SLA medido dos provedores; deve ser ajustado à integração.
+
+`exponentialBackoff`, função pura compartilhada com a outbox, calcula
+`1s × 2^(attempts-1)` com teto de cinco minutos. A pendência nasce com contador zero e primeira consulta agendada em um segundo;
+cada retry incrementa o contador antes de calcular o backoff. Para referência
+ausente, o agendamento é limitado ao
+próprio deadline, para o backoff não adiar a expiração. Somente se a referência
+continuar inexistente ao vencer o prazo ocorre `REFERENCE_NOT_FOUND` e evento
+rejeitado. Referência existente, ainda pendente, continua esperando além do TTL;
+referência existente processada continua podendo ser aplicada após esse prazo.
+
+A consulta de candidatos devidos não toma locks. Cada candidato segue:
+
+1. Abre uma transação e trava a wallet, com o lock_timeout existente.
+2. Trava a transação pendente com `FOR UPDATE SKIP LOCKED`.
+3. Confere novamente status e vencimento. Se outro worker resolveu ou reagendou,
+   sai sem efeito; senão usa o mesmo colaborador do submit.
+4. Confirma todos os efeitos financeiros e eventos atomicamente.
+
+A ordem é sempre wallet antes da linha da transação. Assim, aceleração de
+pendentes durante um submit não cria um ciclo de locks com o resolver. A chegada
+de qualquer transação processada antecipa para now as pendentes que a referenciam
+por provedor e id externo, somente na mesma wallet e no mesmo commit SQL.
+Pendentes de outra wallet não são tocadas; recebem REFERENCE_MISMATCH no seu
+ciclo normal. Índices parciais de vencimento e referência sustentam as buscas.
+
+Uma falha inesperada aborta movimento, desfecho e outbox. O resolver agenda retry
+numa transação nova, repetindo wallet antes da linha, status e vencimento.
+Falha de infraestrutura ou aplicação nunca é convertida em referência ausente.
+Se o reagendamento também falhar, registra a falha e deixa a pendente para um
+ciclo posterior. Esse caminho não impõe TTL: uma referência existente com defeito
+continua pendente até recuperação; FAILED é responsabilidade do próximo passo.
+
+O mesmo processo worker executa dois ciclos com intervalos próprios. O novo
+`PendingReferenceWorker` usa `PENDING_REFERENCE_POLL_INTERVAL_MS`, padrão 1000,
+e lote de até 100 candidatos. SIGTERM para os schedulers e aguarda os lotes em
+andamento antes de destruir o pool; uma interrupção forçada é recuperada pelo
+estado persistido. Os testes com dois processos, reinício e SIGTERM rodam em
+Linux; no Windows, SIGTERM não oferece a mesma semântica de sinal.
+
+O Registry existente expõe `pending_reference_transactions` (gauge),
+`pending_reference_resolved_total` (counter com outcome processed/rejected/expired)
+e `pending_reference_retries_total`. Logs levam identificadores e
+código ou classe da falha, sem payload financeiro. Contadores são locais ao
+processo; a gauge é uma observação do total no banco, e não deve ser somada entre
+workers como se cada processo possuísse pendentes diferentes.
