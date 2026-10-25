@@ -16,6 +16,8 @@ const context = {
 };
 const transaction = () =>
   WagerTransaction.create({
+    referenceExternalTransactionId: undefined,
+    correlationId: 'correlation',
     id: 'transaction',
     providerId: 'provider',
     externalTransactionId: 'external',
@@ -46,6 +48,7 @@ const expected = {
 describe('eventos da transação', () => {
   it('pendência serializa referência externa e saldo null na versão 1', () => {
     const tx = WagerTransaction.create({
+      correlationId: 'correlation',
       id: 'pending',
       providerId: 'provider',
       externalTransactionId: 'refund',
@@ -60,7 +63,7 @@ describe('eventos da transação', () => {
       referenceExternalTransactionId: 'bet',
     });
     expect(() => WagerTransactionPendingReference.from(tx, context)).toThrow();
-    tx.markPendingReference(at);
+    tx.markPendingReference(at, 3600);
     expect(
       WagerTransactionPendingReference.from(tx, context).toJSON(),
     ).toMatchObject({
@@ -111,6 +114,7 @@ describe('eventos da transação', () => {
 
   it('OPENING preserva os campos ausentes como null', () => {
     const tx = WagerTransaction.opening({
+      correlationId: 'correlation',
       id: 'opening',
       walletId: 'wallet',
       playerId: 'player',

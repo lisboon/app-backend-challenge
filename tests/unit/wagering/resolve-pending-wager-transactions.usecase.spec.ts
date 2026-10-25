@@ -64,7 +64,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
       referenceExternalTransactionId: 'bet-ext',
       correlationId: 'original',
     });
-    transaction.markPendingReference(at);
+    transaction.markPendingReference(at, 3600);
     reference = null;
     const transactions: TransactionManager = {
       execute: (work) => work(new FakeContext()),
@@ -151,6 +151,8 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
 
   const bet = () => {
     const tx = WagerTransaction.create({
+      referenceExternalTransactionId: undefined,
+      correlationId: 'correlation',
       id: 'bet',
       providerId: 'provider',
       externalTransactionId: 'bet-ext',
@@ -199,6 +201,8 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
 
   it('referência rejeitada gera o desfecho de negócio', async () => {
     reference = WagerTransaction.create({
+      referenceExternalTransactionId: undefined,
+      correlationId: 'correlation',
       id: 'bet',
       providerId: 'provider',
       externalTransactionId: 'bet-ext',

@@ -79,6 +79,11 @@ export class Money {
     return this.value.lessThan(0);
   }
 
+  canAdd(other: Money): boolean {
+    this.assertSameCurrency(other);
+    return Money.fits(this.value.plus(other.value));
+  }
+
   isLessThan(other: Money): boolean {
     this.assertSameCurrency(other);
     return this.value.lessThan(other.value);
@@ -103,10 +108,14 @@ export class Money {
   }
 
   private static of(value: DecimalValue, currency: string): Money {
-    if (value.abs().greaterThanOrEqualTo(MAX_MAGNITUDE)) {
+    if (!Money.fits(value)) {
       throw new MoneyOverflowError(MAX_INTEGER_DIGITS);
     }
     return new Money(value, currency);
+  }
+
+  private static fits(value: DecimalValue): boolean {
+    return value.abs().lessThan(MAX_MAGNITUDE);
   }
 
   private static parseAmount(amount: string): DecimalValue {

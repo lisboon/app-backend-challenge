@@ -230,6 +230,7 @@ describe('eventos financeiros atômicos na outbox', () => {
           { next: uuid },
           { now: () => new Date() },
           failing,
+          3600,
         ),
       );
       expect(
@@ -298,6 +299,7 @@ describe('eventos financeiros atômicos na outbox', () => {
           { next: uuid },
           { now: () => now },
           gateway,
+          3600,
         ),
       );
     const first = make(holding, realWallets).execute({

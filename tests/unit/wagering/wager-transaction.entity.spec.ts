@@ -23,6 +23,7 @@ const brl = (amount: string): Money => Money.from({ amount, currency: 'BRL' });
 
 const opening = (amount = '100.00', walletId = 'wallet-1') =>
   WagerTransaction.opening({
+    correlationId: 'correlation',
     id: 'opening-1',
     walletId,
     playerId: 'player-1',
@@ -32,6 +33,8 @@ const opening = (amount = '100.00', walletId = 'wallet-1') =>
 
 const submitted = (overrides: Partial<CreateWagerTransactionProps> = {}) =>
   WagerTransaction.create({
+    referenceExternalTransactionId: undefined,
+    correlationId: 'correlation',
     id: 'tx-1',
     providerId: 'provider-a',
     externalTransactionId: 'ext-1',
@@ -55,6 +58,11 @@ const wallet = (balance = '100.00') => ({
 describe('WagerTransaction: referências e reversões', () => {
   const reference = (overrides: Partial<WagerTransactionState> = {}) =>
     WagerTransaction.rehydrate({
+      referenceExternalTransactionId: undefined,
+      correlationId: 'correlation',
+      referenceTransactionId: undefined,
+      referenceAttempts: 0,
+      nextReferenceAttemptAt: undefined,
       id: 'bet-id',
       providerId: 'provider-a',
       externalTransactionId: 'bet-external',
@@ -158,7 +166,8 @@ describe('WagerTransaction: referências e reversões', () => {
     const win = submitted({ kind: WagerTransactionKind.Win });
     expect(win.requiresReference()).toBe(false);
     const referenced = reversal({ kind: WagerTransactionKind.Win });
-    expect(referenced.requiresReference()).toBe(true);
+    expect(referenced.hasReference()).toBe(true);
+    expect(referenced.requiresReference()).toBe(false);
     expect(referenced.payloadHash).toBe(
       'v1:9bb4bc4ad0790852787c123cff8d086629dee8c6292b1d04a4b0b274b85969f3',
     );
@@ -211,18 +220,17 @@ describe('WagerTransaction: referências e reversões', () => {
       reversal({ kind }).rejectionFor(
         wallet(),
         reference({ kind: referenceKind }),
+        [],
       ),
     ).toBe(FailureCode.REFERENCE_KIND_INVALID);
   });
   it.each([
-    { providerId: 'other' },
     { walletId: 'other' },
     { playerId: 'other' },
     { roundId: 'other' },
-    { externalTransactionId: 'other' },
     { money: Money.from({ amount: '25.00', currency: 'USD' }) },
   ])('rejeita identidade incompatível %j', (change) => {
-    expect(reversal().rejectionFor(wallet(), reference(change))).toBe(
+    expect(reversal().rejectionFor(wallet(), reference(change), [])).toBe(
       FailureCode.REFERENCE_MISMATCH,
     );
   });
@@ -231,6 +239,7 @@ describe('WagerTransaction: referências e reversões', () => {
       reversal().rejectionFor(
         wallet(),
         reference({ status: WagerTransactionStatus.Rejected }),
+        [],
       ),
     ).toBe(FailureCode.REFERENCE_NOT_PROCESSED);
   });
@@ -242,6 +251,7 @@ describe('WagerTransaction: referências e reversões', () => {
       }).rejectionFor(
         wallet('0.00'),
         reference({ status: WagerTransactionStatus.PendingReference }),
+        [],
       ),
     ).toBeUndefined();
   });
@@ -318,7 +328,7 @@ describe('WagerTransaction: referências e reversões', () => {
   });
   it('reversão exige valor igual', () => {
     expect(
-      reversal({ money: brl('24.00') }).rejectionFor(wallet(), reference()),
+      reversal({ money: brl('24.00') }).rejectionFor(wallet(), reference(), []),
     ).toBe(FailureCode.REVERSAL_AMOUNT_MISMATCH);
   });
   it('débito de reversão usa o código distinto de falta de saldo', () => {
@@ -326,6 +336,7 @@ describe('WagerTransaction: referências e reversões', () => {
       reversal({ kind: WagerTransactionKind.Rollback }).rejectionFor(
         wallet('0.00'),
         reference({ kind: WagerTransactionKind.Win }),
+        [],
       ),
     ).toBe(FailureCode.REVERSAL_INSUFFICIENT_BALANCE);
   });
@@ -336,6 +347,7 @@ describe('WagerTransaction: referências e reversões', () => {
         reversal({ kind }).rejectionFor(
           wallet('999999999999999999.99'),
           reference(),
+          [],
         ),
       ).toBe(FailureCode.BALANCE_LIMIT_EXCEEDED);
     },
@@ -350,13 +362,13 @@ describe('WagerTransaction: referências e reversões', () => {
       playerId: 'other',
       status: WagerTransactionStatus.Rejected,
     });
-    expect(tx.rejectionFor({ ...wallet(), playerId: 'other' }, invalid)).toBe(
-      FailureCode.WALLET_PLAYER_MISMATCH,
-    );
-    expect(tx.rejectionFor({ ...wallet(), currency: 'USD' }, invalid)).toBe(
+    expect(
+      tx.rejectionFor({ ...wallet(), playerId: 'other' }, invalid, []),
+    ).toBe(FailureCode.WALLET_PLAYER_MISMATCH);
+    expect(tx.rejectionFor({ ...wallet(), currency: 'USD' }, invalid, [])).toBe(
       FailureCode.CURRENCY_MISMATCH,
     );
-    expect(tx.rejectionFor(wallet(), invalid)).toBe(
+    expect(tx.rejectionFor(wallet(), invalid, [])).toBe(
       FailureCode.REFERENCE_KIND_INVALID,
     );
     expect(
@@ -366,6 +378,7 @@ describe('WagerTransaction: referências e reversões', () => {
           playerId: 'other',
           status: WagerTransactionStatus.Rejected,
         }),
+        [],
       ),
     ).toBe(FailureCode.REFERENCE_MISMATCH);
     expect(
@@ -382,12 +395,13 @@ describe('WagerTransaction: referências e reversões', () => {
       tx.rejectionFor(
         wallet('0.00'),
         reference({ kind: WagerTransactionKind.Win }),
+        [],
       ),
     ).toBe(FailureCode.REVERSAL_AMOUNT_MISMATCH);
   });
   it('aguarda, agenda retry, expira pelo relógio e resolve mantendo a correlação', () => {
     const tx = reversal({ correlationId: 'original' });
-    tx.markPendingReference(at);
+    tx.markPendingReference(at, 3600);
     expect(tx.isTerminal()).toBe(false);
     expect(tx.isReferenceDue(at)).toBe(false);
     expect(tx.isReferenceDue(new Date(at.getTime() + 1000))).toBe(true);
@@ -538,7 +552,7 @@ describe('WagerTransaction: movimento e regras', () => {
       submitted({
         kind: WagerTransactionKind.Win,
         money: brl('0.01'),
-      }).rejectionFor(wallet('999999999999999999.99')),
+      }).rejectionFor(wallet('999999999999999999.99'), null, []),
     ).toBe('BALANCE_LIMIT_EXCEEDED');
   });
 
@@ -567,7 +581,7 @@ describe('WagerTransaction: movimento e regras', () => {
   });
 
   it('aceita BET com saldo suficiente, inclusive exato', () => {
-    expect(submitted().rejectionFor(wallet('25.00'))).toBeUndefined();
+    expect(submitted().rejectionFor(wallet('25.00'), null, [])).toBeUndefined();
   });
 
   it.each([
@@ -585,13 +599,15 @@ describe('WagerTransaction: movimento e regras', () => {
       FailureCode.CURRENCY_MISMATCH,
     ],
   ])('rejeita %s', (_caso, overrides, target, code) => {
-    expect(submitted(overrides).rejectionFor(target)).toBe(code);
+    expect(submitted(overrides).rejectionFor(target, null, [])).toBe(code);
   });
 
   it.each([[WagerTransactionKind.Win], [WagerTransactionKind.Loss]])(
     '%s não depende de saldo',
     (kind) => {
-      expect(submitted({ kind }).rejectionFor(wallet('0.00'))).toBeUndefined();
+      expect(
+        submitted({ kind }).rejectionFor(wallet('0.00'), null, []),
+      ).toBeUndefined();
     },
   );
 });
@@ -643,6 +659,11 @@ describe('WagerTransaction: transições', () => {
 
   it('rehydrate reconstrói o estado sem revalidar', () => {
     const transaction = WagerTransaction.rehydrate({
+      referenceExternalTransactionId: undefined,
+      correlationId: 'correlation',
+      referenceTransactionId: undefined,
+      referenceAttempts: 0,
+      nextReferenceAttemptAt: undefined,
       id: 'tx-1',
       providerId: 'provider-a',
       externalTransactionId: 'ext-1',

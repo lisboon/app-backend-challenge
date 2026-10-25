@@ -21,7 +21,7 @@ export class WagerTransactionSettlement {
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     private readonly outbox: OutboxGateway,
-    private readonly ttlSeconds = 3600,
+    private readonly ttlSeconds: number,
   ) {}
 
   async apply(
@@ -30,14 +30,7 @@ export class WagerTransactionSettlement {
     trx: TransactionContext,
   ): Promise<void> {
     const at = this.clock.now();
-    const reference =
-      transaction.referenceExternalTransactionId === undefined
-        ? null
-        : await this.wagers.findByExternalId(
-            transaction.providerId,
-            transaction.referenceExternalTransactionId,
-            trx,
-          );
+    const reference = await this.referenceOf(transaction, trx);
     const reversals = reference
       ? await this.wagers.findReversals(reference.id, trx)
       : [];
@@ -46,41 +39,67 @@ export class WagerTransactionSettlement {
       await this.reject(transaction, wallet, rejection, at, trx);
       return;
     }
-    if (
-      transaction.requiresReference() &&
-      reference?.status !== WagerTransactionStatus.Processed
-    ) {
-      if (
-        !reference &&
-        transaction.status === WagerTransactionStatus.PendingReference &&
-        transaction.referenceExpired(at, this.ttlSeconds)
-      ) {
-        await this.reject(
-          transaction,
-          wallet,
-          FailureCode.REFERENCE_NOT_FOUND,
-          at,
-          trx,
-        );
-      } else if (transaction.status === WagerTransactionStatus.Pending) {
-        transaction.markPendingReference(at, this.ttlSeconds);
-        await this.outbox.create(
-          OutboxMessage.enqueue(
-            WagerTransactionPendingReference.from(
-              transaction,
-              this.context(transaction, at),
-            ),
-          ),
-          trx,
-        );
-      } else {
-        transaction.scheduleReferenceRetry(
-          at,
-          reference ? undefined : this.ttlSeconds,
-        );
-      }
+    if (transaction.awaitsReference(reference)) {
+      await this.awaitReference(transaction, wallet, reference, at, trx);
       return;
     }
+    await this.process(transaction, wallet, reference, at, trx);
+  }
+
+  private referenceOf(
+    transaction: WagerTransaction,
+    trx: TransactionContext,
+  ): Promise<WagerTransaction | null> {
+    return transaction.referenceExternalTransactionId === undefined
+      ? Promise.resolve(null)
+      : this.wagers.findByExternalId(
+          transaction.providerId,
+          transaction.referenceExternalTransactionId,
+          trx,
+        );
+  }
+
+  private async awaitReference(
+    transaction: WagerTransaction,
+    wallet: LockedWallet,
+    reference: WagerTransaction | null,
+    at: Date,
+    trx: TransactionContext,
+  ): Promise<void> {
+    if (transaction.status === WagerTransactionStatus.Pending) {
+      transaction.markPendingReference(at, this.ttlSeconds);
+      await this.enqueue(
+        WagerTransactionPendingReference.from(
+          transaction,
+          this.context(transaction, at),
+        ),
+        trx,
+      );
+      return;
+    }
+    if (!reference && transaction.referenceExpired(at, this.ttlSeconds)) {
+      await this.reject(
+        transaction,
+        wallet,
+        FailureCode.REFERENCE_NOT_FOUND,
+        at,
+        trx,
+      );
+      return;
+    }
+    transaction.scheduleReferenceRetry(
+      at,
+      reference ? undefined : this.ttlSeconds,
+    );
+  }
+
+  private async process(
+    transaction: WagerTransaction,
+    wallet: LockedWallet,
+    reference: WagerTransaction | null,
+    at: Date,
+    trx: TransactionContext,
+  ): Promise<void> {
     const context = this.context(transaction, at);
     const movement = transaction.affectsBalance()
       ? await wallet.apply({
@@ -102,22 +121,12 @@ export class WagerTransactionSettlement {
       at,
       reference?.id,
     );
-    await this.outbox.create(
-      OutboxMessage.enqueue(
-        WagerTransactionProcessed.from(transaction, context),
-      ),
+    await this.enqueue(
+      WagerTransactionProcessed.from(transaction, context),
       trx,
     );
     await movement?.recordBalanceChanged();
     await this.wagers.accelerateReferences(transaction, at, trx);
-  }
-
-  private context(transaction: WagerTransaction, at: Date): EventContext {
-    return {
-      eventId: this.ids.next(),
-      correlationId: transaction.correlationId,
-      occurredAt: at,
-    };
   }
 
   private async reject(
@@ -128,14 +137,27 @@ export class WagerTransactionSettlement {
     trx: TransactionContext,
   ): Promise<void> {
     transaction.reject(code, wallet.balance, at);
-    await this.outbox.create(
-      OutboxMessage.enqueue(
-        WagerTransactionRejected.from(
-          transaction,
-          this.context(transaction, at),
-        ),
-      ),
+    await this.enqueue(
+      WagerTransactionRejected.from(transaction, this.context(transaction, at)),
       trx,
     );
+  }
+
+  private enqueue(
+    event:
+      | WagerTransactionPendingReference
+      | WagerTransactionProcessed
+      | WagerTransactionRejected,
+    trx: TransactionContext,
+  ): Promise<void> {
+    return this.outbox.create(OutboxMessage.enqueue(event), trx);
+  }
+
+  private context(transaction: WagerTransaction, at: Date): EventContext {
+    return {
+      eventId: this.ids.next(),
+      correlationId: transaction.correlationId,
+      occurredAt: at,
+    };
   }
 }

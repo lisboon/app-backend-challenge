@@ -230,7 +230,7 @@ describe('SubmitWagerTransactionUseCase', () => {
       wallets,
       ids,
       clock,
-      new WagerTransactionSettlement(wagers, ids, clock, outbox),
+      new WagerTransactionSettlement(wagers, ids, clock, outbox, 3600),
     );
   });
 
@@ -337,6 +337,7 @@ describe('SubmitWagerTransactionUseCase', () => {
 
   it('perdendo a corrida pela chave, refaz uma vez e devolve o vencedor', async () => {
     const winner = WagerTransaction.create({
+      referenceExternalTransactionId: undefined,
       ...input(),
       id: 'winner',
       money: brl('30.00'),

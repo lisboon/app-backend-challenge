@@ -1085,6 +1085,7 @@ describe('schema (integração com PostgreSQL real)', () => {
         const { opened, id } = await bet();
         await rawMove(opened, 'REFUND', id);
         const transaction = WagerTransaction.create({
+          correlationId: 'correlation',
           id: uuid(),
           providerId: 'provider-a',
           externalTransactionId: uuid(),
@@ -1101,7 +1102,7 @@ describe('schema (integração com PostgreSQL real)', () => {
         const repository = new WagerTransactionRepository();
         const manager = new MikroOrmTransactionManager(orm);
         if (method === 'update') {
-          transaction.markPendingReference(new Date());
+          transaction.markPendingReference(new Date(), 3600);
           await manager.execute((trx) => repository.create(transaction, trx));
         }
         transaction.markProcessed(
