@@ -10,6 +10,33 @@ export class ProviderReservedError extends DomainError {
   }
 }
 
+export class ReferenceRequiredError extends DomainError {
+  constructor() {
+    super(
+      FailureCode.REFERENCE_REQUIRED,
+      'a operação exige referenceExternalTransactionId',
+    );
+  }
+}
+
+export class ReferenceNotAllowedError extends DomainError {
+  constructor() {
+    super(
+      FailureCode.REFERENCE_NOT_ALLOWED,
+      'o tipo de operação não aceita referência',
+    );
+  }
+}
+
+export class ReferenceAlreadyReversedError extends DomainError {
+  constructor() {
+    super(
+      FailureCode.REFERENCE_ALREADY_REVERSED,
+      'a referência já foi revertida',
+    );
+  }
+}
+
 export class TransactionKindNotSubmittableError extends DomainError {
   constructor() {
     super(
@@ -63,7 +90,7 @@ export class TransactionNotFoundError extends DomainError {
 
 export class InvalidTransactionStateError extends Error {
   constructor(status: string) {
-    super(`transação em estado terminal ${status} não pode mudar de estado`);
+    super(`transação em estado ${status} não permite essa transição`);
     this.name = 'InvalidTransactionStateError';
   }
 }

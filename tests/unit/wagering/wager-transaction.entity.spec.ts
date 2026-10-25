@@ -9,11 +9,13 @@ import {
 } from '../../../src/modules/wagering/domain/errors/wagering.errors';
 import {
   type CreateWagerTransactionProps,
+  assertWagerTransactionTransition,
   INTERNAL_PROVIDER_ID,
   MovementDirection,
   WagerTransaction,
   WagerTransactionKind,
   WagerTransactionStatus,
+  type WagerTransactionState,
 } from '../../../src/modules/wagering/domain/wager-transaction.entity';
 
 const at = new Date('2026-10-24T12:00:00.000Z');
@@ -48,6 +50,345 @@ const wallet = (balance = '100.00') => ({
   playerId: 'player-1',
   currency: 'BRL',
   balance: brl(balance),
+});
+
+describe('WagerTransaction: referências e reversões', () => {
+  const reference = (overrides: Partial<WagerTransactionState> = {}) =>
+    WagerTransaction.rehydrate({
+      id: 'bet-id',
+      providerId: 'provider-a',
+      externalTransactionId: 'bet-external',
+      idempotencyKey: 'bet-key',
+      payloadHash: 'v1:reference',
+      walletId: 'wallet-1',
+      playerId: 'player-1',
+      roundId: 'round-1',
+      gameId: 'game-1',
+      kind: WagerTransactionKind.Bet,
+      money: brl('25.00'),
+      createdAt: at,
+      status: WagerTransactionStatus.Processed,
+      failureCode: undefined,
+      resultBalance: brl('75.00'),
+      processedAt: at,
+      ...overrides,
+    });
+  const reversal = (overrides: Partial<CreateWagerTransactionProps> = {}) =>
+    submitted({
+      kind: WagerTransactionKind.Refund,
+      referenceExternalTransactionId: 'bet-external',
+      ...overrides,
+    });
+  const refund = () =>
+    reference({
+      id: 'refund-id',
+      externalTransactionId: 'refund-external',
+      kind: WagerTransactionKind.Refund,
+      referenceExternalTransactionId: 'bet-external',
+      referenceTransactionId: 'bet-id',
+    });
+  const undoRefund = () =>
+    reference({
+      id: 'undo-refund-id',
+      kind: WagerTransactionKind.Rollback,
+      referenceExternalTransactionId: 'refund-external',
+      referenceTransactionId: 'refund-id',
+    });
+  const undoBet = () =>
+    reference({
+      id: 'undo-bet-id',
+      kind: WagerTransactionKind.Rollback,
+      referenceExternalTransactionId: 'bet-external',
+      referenceTransactionId: 'bet-id',
+    });
+
+  it.each([WagerTransactionKind.Refund, WagerTransactionKind.Rollback])(
+    'exige referência em %s',
+    (kind) => {
+      expect(() => submitted({ kind })).toThrow(
+        expect.objectContaining({
+          failureCode: FailureCode.REFERENCE_REQUIRED,
+        }),
+      );
+    },
+  );
+  it.each([WagerTransactionKind.Bet, WagerTransactionKind.Loss])(
+    'proíbe referência em %s',
+    (kind) => {
+      expect(() =>
+        submitted({ kind, referenceExternalTransactionId: 'bet' }),
+      ).toThrow(
+        expect.objectContaining({
+          failureCode: FailureCode.REFERENCE_NOT_ALLOWED,
+        }),
+      );
+    },
+  );
+  it.each([
+    [
+      WagerTransactionKind.Bet,
+      'v1:2c5cc6a081edbc1a9b2c8a9a9330a504849916bd5bcb5139ad28df9551d051a9',
+    ],
+    [
+      WagerTransactionKind.Win,
+      'v1:ffe6fb3027921907dee53e07464204d45faa36e3dabac8baebe26190238e90df',
+    ],
+    [
+      WagerTransactionKind.Loss,
+      'v1:f57c1b4d43a74dedfa0919732f79e051914b3a119e4fb8a74f6d032e7edf67ff',
+    ],
+  ] as const)(
+    'preserva o hash fixo de %s calculado na base',
+    (kind, expected) => {
+      expect(submitted({ kind }).payloadHash).toBe(expected);
+    },
+  );
+  it('WIN com referência muda o hash; ausência continua opcional', () => {
+    const win = submitted({ kind: WagerTransactionKind.Win });
+    expect(win.requiresReference()).toBe(false);
+    const referenced = reversal({ kind: WagerTransactionKind.Win });
+    expect(referenced.requiresReference()).toBe(true);
+    expect(referenced.payloadHash).not.toBe(win.payloadHash);
+    expect(
+      reversal({
+        kind: WagerTransactionKind.Win,
+        referenceExternalTransactionId: 'other',
+      }).payloadHash,
+    ).not.toBe(referenced.payloadHash);
+  });
+  it.each([
+    [
+      WagerTransactionKind.Refund,
+      WagerTransactionKind.Bet,
+      MovementDirection.Credit,
+    ],
+    [
+      WagerTransactionKind.Rollback,
+      WagerTransactionKind.Bet,
+      MovementDirection.Credit,
+    ],
+    [
+      WagerTransactionKind.Rollback,
+      WagerTransactionKind.Win,
+      MovementDirection.Debit,
+    ],
+    [
+      WagerTransactionKind.Rollback,
+      WagerTransactionKind.Refund,
+      MovementDirection.Debit,
+    ],
+  ] as const)('%s de %s tem direção %s', (kind, referencedKind, direction) => {
+    expect(
+      reversal({ kind }).ledgerDirectionFor(
+        reference({ kind: referencedKind }),
+      ),
+    ).toBe(direction);
+  });
+  it.each([
+    [WagerTransactionKind.Refund, WagerTransactionKind.Win],
+    [WagerTransactionKind.Refund, WagerTransactionKind.Opening],
+    [WagerTransactionKind.Win, WagerTransactionKind.Win],
+    [WagerTransactionKind.Win, WagerTransactionKind.Opening],
+    [WagerTransactionKind.Rollback, WagerTransactionKind.Loss],
+    [WagerTransactionKind.Rollback, WagerTransactionKind.Opening],
+    [WagerTransactionKind.Rollback, WagerTransactionKind.Rollback],
+  ] as const)('%s recusa referência do tipo %s', (kind, referenceKind) => {
+    expect(
+      reversal({ kind }).rejectionFor(
+        wallet(),
+        reference({ kind: referenceKind }),
+      ),
+    ).toBe(FailureCode.REFERENCE_KIND_INVALID);
+  });
+  it.each([
+    { providerId: 'other' },
+    { walletId: 'other' },
+    { playerId: 'other' },
+    { roundId: 'other' },
+    { externalTransactionId: 'other' },
+    { money: Money.from({ amount: '25.00', currency: 'USD' }) },
+  ])('rejeita identidade incompatível %j', (change) => {
+    expect(reversal().rejectionFor(wallet(), reference(change))).toBe(
+      FailureCode.REFERENCE_MISMATCH,
+    );
+  });
+  it('referência rejeitada não pode ser aplicada', () => {
+    expect(
+      reversal().rejectionFor(
+        wallet(),
+        reference({ status: WagerTransactionStatus.Rejected }),
+      ),
+    ).toBe(FailureCode.REFERENCE_NOT_PROCESSED);
+  });
+  it('referência pendente ainda não decide valor nem saldo', () => {
+    expect(
+      reversal({
+        kind: WagerTransactionKind.Rollback,
+        money: brl('999.00'),
+      }).rejectionFor(
+        wallet('0.00'),
+        reference({ status: WagerTransactionStatus.PendingReference }),
+      ),
+    ).toBeUndefined();
+  });
+  it('REFUND vivo bloqueia ROLLBACK de BET para não duplicar crédito', () => {
+    expect(
+      reversal({ kind: WagerTransactionKind.Rollback }).rejectionFor(
+        wallet(),
+        reference(),
+        [refund()],
+      ),
+    ).toBe(FailureCode.REFERENCE_ALREADY_REVERSED);
+  });
+  it('REFUND desfeito não bloqueia ROLLBACK de BET', () => {
+    expect(
+      reversal({ kind: WagerTransactionKind.Rollback }).rejectionFor(
+        wallet(),
+        reference(),
+        [refund(), undoRefund()],
+      ),
+    ).toBeUndefined();
+  });
+  it('o limite de uma reversão por tipo permanece depois de desfazer REFUND', () => {
+    expect(
+      reversal().rejectionFor(wallet(), reference(), [refund(), undoRefund()]),
+    ).toBe(FailureCode.REFERENCE_ALREADY_REVERSED);
+  });
+  it('ROLLBACK de BET bloqueia REFUND e outro ROLLBACK', () => {
+    for (const kind of [
+      WagerTransactionKind.Refund,
+      WagerTransactionKind.Rollback,
+    ]) {
+      expect(
+        reversal({ kind }).rejectionFor(wallet(), reference(), [undoBet()]),
+      ).toBe(FailureCode.REFERENCE_ALREADY_REVERSED);
+    }
+  });
+  it('ROLLBACK do mesmo REFUND só aplica uma vez', () => {
+    expect(
+      reversal({
+        kind: WagerTransactionKind.Rollback,
+        referenceExternalTransactionId: 'refund-external',
+      }).rejectionFor(wallet(), refund(), [undoRefund()]),
+    ).toBe(FailureCode.REFERENCE_ALREADY_REVERSED);
+  });
+  it('WIN não é reversão, nem exige mesmo valor ou quantidade máxima', () => {
+    expect(
+      reversal({
+        kind: WagerTransactionKind.Win,
+        money: brl('1.00'),
+      }).rejectionFor(wallet(), reference(), [refund(), undoBet()]),
+    ).toBeUndefined();
+  });
+  it('reversão exige valor igual', () => {
+    expect(
+      reversal({ money: brl('24.00') }).rejectionFor(wallet(), reference()),
+    ).toBe(FailureCode.REVERSAL_AMOUNT_MISMATCH);
+  });
+  it('débito de reversão usa o código distinto de falta de saldo', () => {
+    expect(
+      reversal({ kind: WagerTransactionKind.Rollback }).rejectionFor(
+        wallet('0.00'),
+        reference({ kind: WagerTransactionKind.Win }),
+      ),
+    ).toBe(FailureCode.REVERSAL_INSUFFICIENT_BALANCE);
+  });
+  it.each([WagerTransactionKind.Refund, WagerTransactionKind.Rollback])(
+    'limite do saldo também protege %s que credita',
+    (kind) => {
+      expect(
+        reversal({ kind }).rejectionFor(
+          wallet('999999999999999999.99'),
+          reference(),
+        ),
+      ).toBe(FailureCode.BALANCE_LIMIT_EXCEEDED);
+    },
+  );
+  it('precedência: wallet, tipo, identidade, estado, reversão, valor e saldo', () => {
+    const tx = reversal({
+      kind: WagerTransactionKind.Rollback,
+      money: brl('999.00'),
+    });
+    const invalid = reference({
+      kind: WagerTransactionKind.Opening,
+      playerId: 'other',
+      status: WagerTransactionStatus.Rejected,
+    });
+    expect(tx.rejectionFor({ ...wallet(), playerId: 'other' }, invalid)).toBe(
+      FailureCode.WALLET_PLAYER_MISMATCH,
+    );
+    expect(tx.rejectionFor({ ...wallet(), currency: 'USD' }, invalid)).toBe(
+      FailureCode.CURRENCY_MISMATCH,
+    );
+    expect(tx.rejectionFor(wallet(), invalid)).toBe(
+      FailureCode.REFERENCE_KIND_INVALID,
+    );
+    expect(
+      tx.rejectionFor(
+        wallet(),
+        reference({
+          playerId: 'other',
+          status: WagerTransactionStatus.Rejected,
+        }),
+      ),
+    ).toBe(FailureCode.REFERENCE_MISMATCH);
+    expect(
+      tx.rejectionFor(
+        wallet(),
+        reference({ status: WagerTransactionStatus.Rejected }),
+        [undoBet()],
+      ),
+    ).toBe(FailureCode.REFERENCE_NOT_PROCESSED);
+    expect(tx.rejectionFor(wallet(), reference(), [undoBet()])).toBe(
+      FailureCode.REFERENCE_ALREADY_REVERSED,
+    );
+    expect(
+      tx.rejectionFor(
+        wallet('0.00'),
+        reference({ kind: WagerTransactionKind.Win }),
+      ),
+    ).toBe(FailureCode.REVERSAL_AMOUNT_MISMATCH);
+  });
+  it('aguarda, agenda retry, expira pelo relógio e resolve mantendo a correlação', () => {
+    const tx = reversal({ correlationId: 'original' });
+    tx.markPendingReference(at);
+    expect(tx.isTerminal()).toBe(false);
+    expect(tx.isReferenceDue(at)).toBe(false);
+    expect(tx.isReferenceDue(new Date(at.getTime() + 1000))).toBe(true);
+    tx.scheduleReferenceRetry(at);
+    expect(tx.referenceAttempts).toBe(1);
+    expect(tx.referenceExpired(new Date(at.getTime() + 3599999), 3600)).toBe(
+      false,
+    );
+    expect(tx.referenceExpired(new Date(at.getTime() + 3600000), 3600)).toBe(
+      true,
+    );
+    tx.markProcessed(brl('100.00'), at, 'bet-id');
+    expect(tx.referenceTransactionId).toBe('bet-id');
+    expect(tx.nextReferenceAttemptAt).toBeUndefined();
+    expect(tx.correlationId).toBe('original');
+  });
+  for (const from of Object.values(WagerTransactionStatus)) {
+    for (const to of Object.values(WagerTransactionStatus)) {
+      it(`transição ${from} → ${to} respeita a tabela fechada`, () => {
+        const allowed =
+          (from === WagerTransactionStatus.Pending &&
+            to !== WagerTransactionStatus.Pending) ||
+          (from === WagerTransactionStatus.PendingReference &&
+            (to === WagerTransactionStatus.Processed ||
+              to === WagerTransactionStatus.Rejected));
+        if (allowed) {
+          expect(() =>
+            assertWagerTransactionTransition(from, to),
+          ).not.toThrow();
+        } else {
+          expect(() => assertWagerTransactionTransition(from, to)).toThrow(
+            InvalidTransactionStateError,
+          );
+        }
+      });
+    }
+  }
 });
 
 describe('WagerTransaction.opening', () => {

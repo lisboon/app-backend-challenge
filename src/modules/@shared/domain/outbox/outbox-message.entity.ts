@@ -1,3 +1,4 @@
+import { exponentialBackoff } from '../backoff';
 import type {
   IntegrationEvent,
   IntegrationEventJSON,
@@ -83,10 +84,7 @@ export class OutboxMessage {
   scheduleRetry(now: Date): void {
     this.assertPending();
     this._attempts += 1;
-    const delay = Math.min(
-      1000 * 2 ** Math.min(this._attempts - 1, 9),
-      300_000,
-    );
+    const delay = exponentialBackoff(this._attempts);
     this._nextAttemptAt = new Date(now.getTime() + delay);
   }
 
