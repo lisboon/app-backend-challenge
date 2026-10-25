@@ -1,7 +1,7 @@
-import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
-import type { WalletGateway } from '../../gateway/wallet.gateway';
+import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { LedgerGateway } from '../../gateway/ledger.gateway';
+import type { WalletGateway } from '../../gateway/wallet.gateway';
 import type {
   ListWalletLedgerUseCaseInputDto,
   ListWalletLedgerUseCaseOutputDto,

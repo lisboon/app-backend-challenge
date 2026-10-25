@@ -2,21 +2,21 @@ import { beforeAll, afterAll, describe, it, expect } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import type { IntegrationEventJSON } from '../../src/modules/@shared/domain/event/integration-event';
 import type { OutboxGateway } from '../../src/modules/@shared/gateway/outbox.gateway';
 import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
-import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
 import { SubmitWagerTransactionUseCase } from '../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase';
+import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
 import { WalletMovementRepository } from '../../src/modules/wallet/repository/wallet-movement.repository';
 import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
-import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
+import { deferred, eventually } from '../support/async';
 import {
   openTestOrm,
   migrateFresh,
   ledgerMatchesBalance,
 } from '../support/database';
-import { deferred, eventually } from '../support/async';
 import { startApp } from '../support/http-app';
 
 const uuid = (): string => Bun.randomUUIDv7();

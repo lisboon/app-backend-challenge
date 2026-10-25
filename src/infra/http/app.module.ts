@@ -1,9 +1,9 @@
 import { Logger, Module, OnApplicationShutdown } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 
-import { ObservabilityModule } from '../observability/observability.module';
 import { ConfigModule } from '../config/config.module';
 import { DatabaseModule } from '../database/database.module';
+import { ObservabilityModule } from '../observability/observability.module';
 import { QueueModule } from '../queue/queue.module';
 import { RuntimeModule } from '../runtime/runtime.module';
 import { HealthModule } from './health/health.module';

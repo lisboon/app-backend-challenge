@@ -1,12 +1,12 @@
 import { OutboxMessage } from '../../@shared/domain/outbox/outbox-message.entity';
-import type { OutboxGateway } from '../../@shared/gateway/outbox.gateway';
-import { WagerTransactionProcessed } from '../event/wager-transaction-processed.event';
 import type { TransactionContext } from '../../@shared/domain/transaction/transaction-manager';
+import type { OutboxGateway } from '../../@shared/gateway/outbox.gateway';
 import type {
   OpeningTransactionGateway,
   WalletOpening,
 } from '../../wallet/gateway/opening-transaction.gateway';
 import { WagerTransaction } from '../domain/wager-transaction.entity';
+import { WagerTransactionProcessed } from '../event/wager-transaction-processed.event';
 import type { WagerTransactionGateway } from '../gateway/wager-transaction.gateway';
 
 export class OpeningTransactionRepository implements OpeningTransactionGateway {

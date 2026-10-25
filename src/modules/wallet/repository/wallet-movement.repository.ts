@@ -1,7 +1,6 @@
 import { OutboxMessage } from '../../@shared/domain/outbox/outbox-message.entity';
-import type { OutboxGateway } from '../../@shared/gateway/outbox.gateway';
-import { WalletBalanceChanged } from '../event/wallet-balance-changed.event';
 import type { TransactionContext } from '../../@shared/domain/transaction/transaction-manager';
+import type { OutboxGateway } from '../../@shared/gateway/outbox.gateway';
 import { MovementDirection } from '../../wagering/domain/wager-transaction.entity';
 import type {
   LockedWallet,
@@ -10,6 +9,7 @@ import type {
   WalletMovementResult,
 } from '../../wagering/gateway/wallet-movement.gateway';
 import type { Wallet } from '../domain/wallet.entity';
+import { WalletBalanceChanged } from '../event/wallet-balance-changed.event';
 import type { LedgerGateway } from '../gateway/ledger.gateway';
 import type { WalletGateway } from '../gateway/wallet.gateway';
 

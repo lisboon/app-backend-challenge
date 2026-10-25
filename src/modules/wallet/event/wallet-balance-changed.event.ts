@@ -4,11 +4,11 @@ import {
   type IntegrationEventProps,
 } from '../../@shared/domain/event/integration-event';
 import type { MoneyProps } from '../../@shared/domain/money';
-import type { Wallet } from '../domain/wallet.entity';
 import type {
   LedgerDirection,
   WalletLedgerEntry,
 } from '../domain/wallet-ledger-entry.entity';
+import type { Wallet } from '../domain/wallet.entity';
 
 export interface WalletBalanceChangedData {
   walletId: string;

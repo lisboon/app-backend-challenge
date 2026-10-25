@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
-import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { FailureCode } from '../../src/modules/@shared/domain/failure-code';
+import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
 import { OpeningTransactionRepository } from '../../src/modules/wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';

@@ -13,7 +13,6 @@ import { Logger } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { Registry } from 'prom-client';
 
-import { deferred, eventually } from '../support/async';
 import {
   entityManagerOf,
   MikroOrmTransactionManager,
@@ -25,13 +24,12 @@ import type { TransactionManager } from '../../src/modules/@shared/domain/transa
 import type { EventPublisherGateway } from '../../src/modules/@shared/gateway/event-publisher.gateway';
 import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
 import { PublishOutboxUseCase } from '../../src/modules/@shared/usecase/publish-outbox/publish-outbox.usecase';
+import { deferred, eventually } from '../support/async';
 import {
   openTestOrm,
   migrateFresh,
   ledgerMatchesBalance,
 } from '../support/database';
-import { freePort, spawnApp, testAppEnv, waitReady } from '../support/process';
-import { retryTransient } from '../support/retry-transient';
 import {
   eventsQueue,
   queueIsEmpty,
@@ -39,6 +37,8 @@ import {
   seedOutbox,
   testSqs,
 } from '../support/outbox';
+import { freePort, spawnApp, testAppEnv, waitReady } from '../support/process';
+import { retryTransient } from '../support/retry-transient';
 
 const clock = { now: () => new Date() };
 

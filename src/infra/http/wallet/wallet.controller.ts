@@ -15,12 +15,12 @@ import type { ReconcileWalletUseCaseOutputDto } from '../../../modules/wallet/us
 import type { WalletOutputDto } from '../../../modules/wallet/usecase/wallet.output.dto';
 import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';
+import { encodeLedgerCursor } from './ledger.cursor';
 import {
   createWalletRequest,
   ledgerQuery,
   walletIdParam,
 } from './wallet.request';
-import { encodeLedgerCursor } from './ledger.cursor';
 
 interface WalletLedgerResponse {
   items: ListWalletLedgerUseCaseOutputDto['items'];

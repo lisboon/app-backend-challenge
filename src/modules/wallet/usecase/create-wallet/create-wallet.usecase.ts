@@ -1,11 +1,11 @@
-import { OutboxMessage } from '../../../@shared/domain/outbox/outbox-message.entity';
-import type { OutboxGateway } from '../../../@shared/gateway/outbox.gateway';
-import { WalletBalanceChanged } from '../../event/wallet-balance-changed.event';
 import { Money } from '../../../@shared/domain/money';
+import { OutboxMessage } from '../../../@shared/domain/outbox/outbox-message.entity';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../../@shared/gateway/id-generator.gateway';
+import type { OutboxGateway } from '../../../@shared/gateway/outbox.gateway';
 import { Wallet } from '../../domain/wallet.entity';
+import { WalletBalanceChanged } from '../../event/wallet-balance-changed.event';
 import type { LedgerGateway } from '../../gateway/ledger.gateway';
 import type { OpeningTransactionGateway } from '../../gateway/opening-transaction.gateway';
 import type { WalletGateway } from '../../gateway/wallet.gateway';

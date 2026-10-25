@@ -1,7 +1,7 @@
 import type { TransactionManager } from '../../@shared/domain/transaction/transaction-manager';
-import { OutboxRepository } from '../../@shared/repository/outbox.repository';
 import type { Clock } from '../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../@shared/gateway/id-generator.gateway';
+import { OutboxRepository } from '../../@shared/repository/outbox.repository';
 import { OpeningTransactionRepository } from '../../wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../wagering/repository/wager-transaction.repository';
 import type { ReconciliationMonitor } from '../gateway/reconciliation-monitor.gateway';

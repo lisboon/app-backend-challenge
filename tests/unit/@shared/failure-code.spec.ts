@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  FailureCode,
-  FailureKind,
-  failureKindOf,
-} from '../../../src/modules/@shared/domain/failure-code';
-import {
   CurrencyMismatchError,
   InvalidCurrencyError,
   InvalidMoneyError,
   MoneyOverflowError,
 } from '../../../src/modules/@shared/domain/errors/money.errors';
+import {
+  FailureCode,
+  FailureKind,
+  failureKindOf,
+} from '../../../src/modules/@shared/domain/failure-code';
 
 describe('taxonomia de falha', () => {
   it('mantém o código igual ao nome, para o valor não divergir da chave', () => {

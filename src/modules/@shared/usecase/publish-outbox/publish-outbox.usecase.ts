@@ -1,13 +1,13 @@
-import { publicationErrorCode } from '../../domain/outbox/publication-error-code';
 import type { OutboxMessage } from '../../domain/outbox/outbox-message.entity';
+import { publicationErrorCode } from '../../domain/outbox/publication-error-code';
 import type {
   TransactionContext,
   TransactionManager,
 } from '../../domain/transaction/transaction-manager';
 import type { Clock } from '../../gateway/clock.gateway';
 import type { EventPublisherGateway } from '../../gateway/event-publisher.gateway';
-import type { PendingOutboxGateway } from '../../gateway/outbox.gateway';
 import type { OutboxMonitor } from '../../gateway/outbox-monitor.gateway';
+import type { PendingOutboxGateway } from '../../gateway/outbox.gateway';
 import type {
   PublishOutboxUseCaseInputDto,
   PublishOutboxUseCaseOutputDto,

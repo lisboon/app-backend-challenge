@@ -8,7 +8,6 @@ import {
   migrateFresh,
   openTestOrm,
 } from '../support/database';
-import { retryTransient } from '../support/retry-transient';
 import { startApp } from '../support/http-app';
 import {
   type AppProcess,
@@ -17,6 +16,7 @@ import {
   testAppEnv,
   waitReady,
 } from '../support/process';
+import { retryTransient } from '../support/retry-transient';
 
 const uuid = (): string => Bun.randomUUIDv7();
 

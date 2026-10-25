@@ -2,14 +2,14 @@ import { beforeAll, afterAll, describe, it, expect } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
-import { startApp } from '../support/http-app';
+import type { ListWalletLedgerUseCaseOutputDto } from '../../src/modules/wallet/usecase/list-wallet-ledger/list-wallet-ledger.usecase.dto';
 import {
   openTestOrm,
   migrateFresh,
   ledgerMatchesBalance,
 } from '../support/database';
+import { startApp } from '../support/http-app';
 import { debitWallet } from '../support/ledger';
-import type { ListWalletLedgerUseCaseOutputDto } from '../../src/modules/wallet/usecase/list-wallet-ledger/list-wallet-ledger.usecase.dto';
 
 type Page = {
   items: ListWalletLedgerUseCaseOutputDto['items'];
