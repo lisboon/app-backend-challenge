@@ -1203,19 +1203,14 @@ describe('schema (integração com PostgreSQL real)', () => {
           [id, waiting],
         );
       await orm.migrator.up();
-      const after = await orm.em
-        .fork()
-        .execute<
-          {
-            id: string;
-            correlation_id: string;
-            reference_attempts: number;
-            next_reference_attempt_at: string | null;
-          }[]
-        >(
-          'select id,correlation_id,reference_attempts,next_reference_attempt_at from wager_transactions where id in (?,?) order by id',
-          [id, waiting],
-        );
+      const after = await orm.em.fork().execute<
+        {
+          id: string;
+          correlation_id: string;
+          reference_attempts: number;
+          next_reference_attempt_at: string | null;
+        }[]
+      >('select id,correlation_id,reference_attempts,next_reference_attempt_at from wager_transactions where id in (?,?) order by id', [id, waiting]);
       expect(after.map((row) => row.id)).toEqual(before.map((row) => row.id));
       expect(
         after.every(

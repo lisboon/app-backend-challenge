@@ -1,8 +1,8 @@
 import type { MoneyProps } from '../../@shared/domain/money';
-import type {
-  WagerTransaction,
-  WagerTransactionKind,
+import {
   WagerTransactionStatus,
+  type WagerTransaction,
+  type WagerTransactionKind,
 } from '../domain/wager-transaction.entity';
 
 export interface WagerTransactionEventData {
@@ -16,13 +16,18 @@ export interface WagerTransactionEventData {
   kind: WagerTransactionKind;
   money: MoneyProps;
   status: WagerTransactionStatus;
-  balance: MoneyProps;
+  balance: MoneyProps | null;
+  referenceExternalTransactionId: string | null;
+  referenceTransactionId: string | null;
 }
 
 export function transactionEventData(
   transaction: WagerTransaction,
 ): WagerTransactionEventData {
-  if (!transaction.resultBalance) {
+  if (
+    !transaction.resultBalance &&
+    transaction.status !== WagerTransactionStatus.PendingReference
+  ) {
     throw new Error('evento exige saldo observado no desfecho');
   }
   return {
@@ -36,6 +41,9 @@ export function transactionEventData(
     kind: transaction.kind,
     money: transaction.money.toJSON(),
     status: transaction.status,
-    balance: transaction.resultBalance.toJSON(),
+    balance: transaction.resultBalance?.toJSON() ?? null,
+    referenceExternalTransactionId:
+      transaction.referenceExternalTransactionId ?? null,
+    referenceTransactionId: transaction.referenceTransactionId ?? null,
   };
 }

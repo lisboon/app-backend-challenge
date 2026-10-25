@@ -17,6 +17,7 @@ export interface SubmitWagerTransactionUseCaseInputDto {
   gameId: string;
   kind: WagerTransactionKind;
   money: MoneyProps;
+  referenceExternalTransactionId?: string;
 }
 
 export interface SubmitWagerTransactionUseCaseOutputDto {

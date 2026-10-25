@@ -9,6 +9,7 @@ import { WagerTransactionRepository } from '../repository/wager-transaction.repo
 import { FindWagerTransactionByExternalIdUseCase } from '../usecase/find-wager-transaction-by-external-id/find-wager-transaction-by-external-id.usecase';
 import { FindWagerTransactionByIdUseCase } from '../usecase/find-wager-transaction-by-id/find-wager-transaction-by-id.usecase';
 import { SubmitWagerTransactionUseCase } from '../usecase/submit-wager-transaction/submit-wager-transaction.usecase';
+import { WagerTransactionSettlement } from '../usecase/wager-transaction-settlement';
 
 export interface WageringFactoryDependencies {
   transactions: TransactionManager;
@@ -26,6 +27,12 @@ export const WageringFactory = {
   create(dependencies: WageringFactoryDependencies): WageringUseCases {
     const wagers = new WagerTransactionRepository();
     const outbox = new OutboxMessageRepository();
+    const settlement = new WagerTransactionSettlement(
+      wagers,
+      dependencies.ids,
+      dependencies.clock,
+      outbox,
+    );
     return {
       submit: new SubmitWagerTransactionUseCase(
         dependencies.transactions,
@@ -37,7 +44,7 @@ export const WageringFactory = {
         ),
         dependencies.ids,
         dependencies.clock,
-        outbox,
+        settlement,
       ),
       findById: new FindWagerTransactionByIdUseCase(
         dependencies.transactions,

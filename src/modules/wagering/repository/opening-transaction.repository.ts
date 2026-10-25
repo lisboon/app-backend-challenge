@@ -16,7 +16,10 @@ export class OpeningTransactionRepository implements OpeningTransactionGateway {
   ) {}
 
   async create(opening: WalletOpening, trx: TransactionContext): Promise<void> {
-    const transaction = WagerTransaction.opening(opening);
+    const transaction = WagerTransaction.opening({
+      ...opening,
+      correlationId: opening.eventContext.correlationId,
+    });
     await this.transactions.create(transaction, trx);
     await this.outbox.create(
       OutboxMessage.enqueue(

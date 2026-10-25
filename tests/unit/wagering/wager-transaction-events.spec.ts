@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { FailureCode } from '../../../src/modules/@shared/domain/failure-code';
 import { Money } from '../../../src/modules/@shared/domain/money';
 import { WagerTransaction } from '../../../src/modules/wagering/domain/wager-transaction.entity';
+import { WagerTransactionPendingReference } from '../../../src/modules/wagering/event/wager-transaction-pending-reference.event';
 import { WagerTransactionProcessed } from '../../../src/modules/wagering/event/wager-transaction-processed.event';
 import { WagerTransactionRejected } from '../../../src/modules/wagering/event/wager-transaction-rejected.event';
 
@@ -36,11 +37,44 @@ const expected = {
   roundId: 'round',
   gameId: 'game',
   kind: 'BET' as const,
+  referenceExternalTransactionId: null,
+  referenceTransactionId: null,
   money: money.toJSON(),
   balance: money.toJSON(),
 };
 
 describe('eventos da transação', () => {
+  it('pendência serializa referência externa e saldo null na versão 1', () => {
+    const tx = WagerTransaction.create({
+      id: 'pending',
+      providerId: 'provider',
+      externalTransactionId: 'refund',
+      idempotencyKey: 'key',
+      walletId: 'wallet',
+      playerId: 'player',
+      roundId: 'round',
+      gameId: 'game',
+      kind: 'REFUND',
+      money,
+      at,
+      referenceExternalTransactionId: 'bet',
+    });
+    expect(() => WagerTransactionPendingReference.from(tx, context)).toThrow();
+    tx.markPendingReference(at);
+    expect(
+      WagerTransactionPendingReference.from(tx, context).toJSON(),
+    ).toMatchObject({
+      eventType: 'WagerTransactionPendingReference',
+      version: 1,
+      data: {
+        status: 'PENDING_REFERENCE',
+        balance: null,
+        referenceExternalTransactionId: 'bet',
+        referenceTransactionId: null,
+      },
+    });
+  });
+
   it('serializa o evento processado com envelope estável e dinheiro em string', () => {
     const tx = transaction();
     tx.markProcessed(money, at);

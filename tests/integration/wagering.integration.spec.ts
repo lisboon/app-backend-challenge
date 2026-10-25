@@ -37,6 +37,7 @@ interface WagerOverrides {
   playerId?: string;
   providerId?: string;
   roundId?: string;
+  referenceExternalTransactionId?: string;
 }
 
 describe('wagering (integração HTTP com PostgreSQL real)', () => {
@@ -610,6 +611,399 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       expect(await balanceOf(wallet.walletId)).toBe('90.00');
       await invariant(wallet.walletId);
     });
+  });
+
+  describe('reversões e referências', () => {
+    const applied = async (
+      wallet: { walletId: string; playerId: string },
+      overrides: WagerOverrides = {},
+    ) => {
+      const body = wager(wallet, overrides);
+      const response = await submitEventually(body);
+      expect(response.status).toBe(201);
+      const result = (await response.json()) as Submitted;
+      await invariant(wallet.walletId);
+      return { body, result };
+    };
+    const rejected = async (
+      wallet: { walletId: string; playerId: string },
+      overrides: WagerOverrides,
+      code: string,
+    ) => {
+      const before = await balanceOf(wallet.walletId);
+      const body = wager(wallet, overrides);
+      const key = uuid();
+      const response = await submitEventually(body, key);
+      expect(response.status).toBe(422);
+      const result = (await response.json()) as Submitted;
+      expect(result).toMatchObject({
+        status: 'REJECTED',
+        failureCode: code,
+        balance: brl(before),
+      });
+      const get = await fetch(
+        `${baseUrl}/wagering/transactions/${result.transactionId}`,
+      );
+      expect(get.status).toBe(200);
+      expect(await get.json()).toMatchObject({
+        status: 'REJECTED',
+        failureCode: code,
+        referenceTransactionId: null,
+      });
+      expect(await (await submitEventually(body, key)).json()).toEqual({
+        ...result,
+        idempotentReplay: true,
+      });
+      expect(await balanceOf(wallet.walletId)).toBe(before);
+      expect(
+        await count(
+          "select count(*) as n from outbox_messages where event_type='WagerTransactionRejected' and payload->'data'->>'transactionId'=?",
+          [result.transactionId],
+        ),
+      ).toBe(1);
+      await invariant(wallet.walletId);
+      return result;
+    };
+
+    it.each([
+      ['REFUND', 'BET', '100.00'],
+      ['ROLLBACK', 'BET', '100.00'],
+      ['ROLLBACK', 'WIN', '100.00'],
+    ])(
+      '%s de %s aplica com saldo final %s e referência consultável',
+      async (kind, referenceKind, expected) => {
+        const wallet = await open('100.00');
+        const ref = await applied(wallet, {
+          kind: referenceKind,
+          money: brl('25.00'),
+        });
+        const tx = await applied(wallet, {
+          kind,
+          money: brl('25.00'),
+          referenceExternalTransactionId: ref.body.externalTransactionId,
+        });
+        expect(tx.result.balance).toEqual(brl(expected));
+        const get = await fetch(
+          `${baseUrl}/wagering/transactions/${tx.result.transactionId}`,
+        );
+        expect(await get.json()).toMatchObject({
+          referenceExternalTransactionId: ref.body.externalTransactionId,
+          referenceTransactionId: ref.result.transactionId,
+        });
+        const rows = await orm.em
+          .fork()
+          .execute<{ direction: string }[]>(
+            'select direction from wallet_ledger_entries where transaction_id=?',
+            [tx.result.transactionId],
+          );
+        expect(rows[0].direction).toBe(
+          referenceKind === 'BET' ? 'CREDIT' : 'DEBIT',
+        );
+      },
+    );
+
+    it('REFUND vivo impede crédito duplicado por ROLLBACK(BET)', async () => {
+      const wallet = await open();
+      const bet = await applied(wallet, { money: brl('25.00') });
+      await applied(wallet, {
+        kind: 'REFUND',
+        money: brl('25.00'),
+        referenceExternalTransactionId: bet.body.externalTransactionId,
+      });
+      await rejected(
+        wallet,
+        {
+          kind: 'ROLLBACK',
+          money: brl('25.00'),
+          referenceExternalTransactionId: bet.body.externalTransactionId,
+        },
+        'REFERENCE_ALREADY_REVERSED',
+      );
+      expect(await balanceOf(wallet.walletId)).toBe('100.00');
+    });
+
+    it('BET → REFUND → ROLLBACK(REFUND) → ROLLBACK(BET) termina em 100', async () => {
+      const wallet = await open();
+      const bet = await applied(wallet, { money: brl('25.00') });
+      const refund = await applied(wallet, {
+        kind: 'REFUND',
+        money: brl('25.00'),
+        referenceExternalTransactionId: bet.body.externalTransactionId,
+      });
+      const undo = await applied(wallet, {
+        kind: 'ROLLBACK',
+        money: brl('25.00'),
+        referenceExternalTransactionId: refund.body.externalTransactionId,
+      });
+      expect(undo.result.balance).toEqual(brl('75.00'));
+      await rejected(
+        wallet,
+        {
+          kind: 'ROLLBACK',
+          money: brl('25.00'),
+          referenceExternalTransactionId: refund.body.externalTransactionId,
+        },
+        'REFERENCE_ALREADY_REVERSED',
+      );
+      await rejected(
+        wallet,
+        {
+          kind: 'REFUND',
+          money: brl('25.00'),
+          referenceExternalTransactionId: bet.body.externalTransactionId,
+        },
+        'REFERENCE_ALREADY_REVERSED',
+      );
+      await applied(wallet, {
+        kind: 'ROLLBACK',
+        money: brl('25.00'),
+        referenceExternalTransactionId: bet.body.externalTransactionId,
+      });
+      expect(await balanceOf(wallet.walletId)).toBe('100.00');
+      await invariant(wallet.walletId);
+    });
+
+    it('ROLLBACK(BET) impede REFUND(BET)', async () => {
+      const wallet = await open();
+      const bet = await applied(wallet, { money: brl('25.00') });
+      await applied(wallet, {
+        kind: 'ROLLBACK',
+        money: brl('25.00'),
+        referenceExternalTransactionId: bet.body.externalTransactionId,
+      });
+      await rejected(
+        wallet,
+        {
+          kind: 'REFUND',
+          money: brl('25.00'),
+          referenceExternalTransactionId: bet.body.externalTransactionId,
+        },
+        'REFERENCE_ALREADY_REVERSED',
+      );
+    });
+
+    it('WIN referencia BET da rodada sem exigir mesmo valor nem reverter a aposta', async () => {
+      const wallet = await open();
+      const bet = await applied(wallet, { money: brl('25.00') });
+      for (let i = 0; i < 2; i++) {
+        await applied(wallet, {
+          kind: 'WIN',
+          money: brl('1.00'),
+          referenceExternalTransactionId: bet.body.externalTransactionId,
+        });
+      }
+      await rejected(
+        wallet,
+        {
+          kind: 'WIN',
+          money: brl('1.00'),
+          referenceExternalTransactionId: bet.body.externalTransactionId,
+          roundId: 'other',
+        },
+        'REFERENCE_MISMATCH',
+      );
+      await rejected(
+        wallet,
+        {
+          kind: 'REFUND',
+          money: brl('24.00'),
+          referenceExternalTransactionId: bet.body.externalTransactionId,
+        },
+        'REVERSAL_AMOUNT_MISMATCH',
+      );
+    });
+
+    it.each(['WIN', 'REFUND'])(
+      '%s recusa referência de tipo incompatível',
+      async (kind) => {
+        const wallet = await open();
+        const win = await applied(wallet, { kind: 'WIN', money: brl('25.00') });
+        await rejected(
+          wallet,
+          {
+            kind,
+            money: brl('25.00'),
+            referenceExternalTransactionId: win.body.externalTransactionId,
+          },
+          'REFERENCE_KIND_INVALID',
+        );
+      },
+    );
+
+    it.each(['WIN', 'REFUND'])('%s recusa BET rejeitado', async (kind) => {
+      const wallet = await open();
+      const body = wager(wallet, { money: brl('200.00') });
+      const response = await submit(body);
+      expect(response.status).toBe(422);
+      await response.arrayBuffer();
+      await rejected(
+        wallet,
+        {
+          kind,
+          money: brl('200.00'),
+          referenceExternalTransactionId: body.externalTransactionId,
+        },
+        'REFERENCE_NOT_PROCESSED',
+      );
+    });
+
+    it('referência de outra wallet é rejeitada sem gravar a FK incompatível', async () => {
+      const wallet = await open();
+      const other = await open();
+      const bet = await applied(other, { money: brl('25.00') });
+      await rejected(
+        wallet,
+        {
+          kind: 'REFUND',
+          money: brl('25.00'),
+          referenceExternalTransactionId: bet.body.externalTransactionId,
+        },
+        'REFERENCE_MISMATCH',
+      );
+      await invariant(other.walletId);
+    });
+
+    it('ROLLBACK sem saldo permanece rejeitado e auditável com código distinto', async () => {
+      const wallet = await open();
+      const win = await applied(wallet, { kind: 'WIN', money: brl('25.00') });
+      await applied(wallet, { money: brl('125.00') });
+      await rejected(
+        wallet,
+        {
+          kind: 'ROLLBACK',
+          money: brl('25.00'),
+          referenceExternalTransactionId: win.body.externalTransactionId,
+        },
+        'REVERSAL_INSUFFICIENT_BALANCE',
+      );
+    });
+
+    it.each(['REFUND', 'ROLLBACK'])(
+      'limite do saldo em %s é rejeição gravada',
+      async (kind) => {
+        const wallet = await open('999999999999999999.99');
+        const bet = await applied(wallet, { money: brl('1.00') });
+        await applied(wallet, { kind: 'WIN', money: brl('1.00') });
+        await rejected(
+          wallet,
+          {
+            kind,
+            money: brl('1.00'),
+            referenceExternalTransactionId: bet.body.externalTransactionId,
+          },
+          'BALANCE_LIMIT_EXCEEDED',
+        );
+      },
+    );
+
+    it.each([
+      ['BET', 'some', 'REFERENCE_NOT_ALLOWED'],
+      ['LOSS', 'some', 'REFERENCE_NOT_ALLOWED'],
+      ['REFUND', undefined, 'REFERENCE_REQUIRED'],
+      ['ROLLBACK', undefined, 'REFERENCE_REQUIRED'],
+    ] as const)(
+      'contrato de %s e referência %s responde 400',
+      async (kind, ref, code) => {
+        const wallet = await open();
+        const response = await submit(
+          wager(wallet, { kind, referenceExternalTransactionId: ref }),
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ failureCode: code });
+        expect(
+          await count(
+            'select count(*) as n from wager_transactions where wallet_id=?',
+            [wallet.walletId],
+          ),
+        ).toBe(1);
+        await invariant(wallet.walletId);
+      },
+    );
+
+    it.each(['refunds', 'mistura'])(
+      '50 reversões paralelas (%s) aplicam exatamente uma vez',
+      async (mode) => {
+        const wallet = await open();
+        const bet = await applied(wallet, { money: brl('25.00') });
+        const responses = await Promise.all(
+          Array.from({ length: 50 }, (_, index) =>
+            submitEventually(
+              wager(wallet, {
+                kind: mode === 'mistura' && index >= 25 ? 'ROLLBACK' : 'REFUND',
+                money: brl('25.00'),
+                referenceExternalTransactionId: bet.body.externalTransactionId,
+              }),
+            ),
+          ),
+        );
+        expect(responses.filter((r) => r.status === 201)).toHaveLength(1);
+        expect(responses.filter((r) => r.status === 422)).toHaveLength(49);
+        const results = await Promise.all(
+          responses.map((r) => r.json() as Promise<Submitted>),
+        );
+        expect(
+          results.filter((r) => r.failureCode === 'REFERENCE_ALREADY_REVERSED'),
+        ).toHaveLength(49);
+        expect(await ledgerMatchesBalance(orm, wallet.walletId)).toEqual({
+          stored: '100.00',
+          rebuilt: '100.00',
+        });
+        expect(
+          await count(
+            'select count(*) as n from wallet_ledger_entries where wallet_id=?',
+            [wallet.walletId],
+          ),
+        ).toBe(3);
+      },
+      30000,
+    );
+
+    it('três APIs com apostas e reversões concorrentes preservam saldo e ledger', async () => {
+      const wallet = await open('1000.00');
+      const bet = await applied(wallet, { money: brl('100.00') });
+      const ports = [freePort(), freePort(), freePort()];
+      const children = ports.map((port) => spawnApp(testAppEnv(port)));
+      const outputs = children.map((child) =>
+        Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]),
+      );
+      try {
+        await Promise.all(ports.map(waitReady));
+        const responses = await Promise.all(
+          Array.from({ length: 70 }, (_, index) => {
+            const overrides =
+              index < 20
+                ? { money: brl('1.00') }
+                : {
+                    kind: index < 45 ? 'REFUND' : 'ROLLBACK',
+                    money: brl('100.00'),
+                    referenceExternalTransactionId:
+                      bet.body.externalTransactionId,
+                  };
+            return submitEventually(
+              wager(wallet, overrides),
+              uuid(),
+              `http://127.0.0.1:${ports[index % 3]}`,
+            );
+          }),
+        );
+        expect(responses.filter((r) => r.status === 201)).toHaveLength(21);
+        expect(responses.filter((r) => r.status === 422)).toHaveLength(49);
+        await Promise.all(responses.map((r) => r.arrayBuffer()));
+        expect(await ledgerMatchesBalance(orm, wallet.walletId)).toEqual({
+          stored: '980.00',
+          rebuilt: '980.00',
+        });
+      } finally {
+        for (const child of children) {
+          child.kill('SIGKILL');
+        }
+        await Promise.all(children.map((child) => child.exited));
+        await Promise.all(outputs);
+      }
+    }, 30000);
   });
 
   describe('consultas', () => {

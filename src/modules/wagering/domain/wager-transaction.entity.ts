@@ -72,6 +72,7 @@ export interface OpeningTransactionProps {
   playerId: string;
   money: Money;
   at: Date;
+  correlationId?: string;
 }
 
 export interface WagerTransactionState {
@@ -205,6 +206,8 @@ export class WagerTransaction {
       undefined,
       props.money,
       props.at,
+      undefined,
+      props.correlationId,
     );
   }
 

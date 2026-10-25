@@ -27,6 +27,7 @@ import type {
 } from '../../../src/modules/wagering/gateway/wallet-movement.gateway';
 import { SubmitWagerTransactionUseCase } from '../../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase';
 import type { SubmitWagerTransactionUseCaseInputDto } from '../../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase.dto';
+import { WagerTransactionSettlement } from '../../../src/modules/wagering/usecase/wager-transaction-settlement';
 
 const at = new Date('2026-10-24T12:00:00.000Z');
 const brl = (amount: string): Money => Money.from({ amount, currency: 'BRL' });
@@ -211,13 +212,15 @@ describe('SubmitWagerTransactionUseCase', () => {
     outbox = new FakeOutbox();
     transactions = new FakeTransactions(wallets, wagers, outbox);
     let sequence = 0;
+    const ids = { next: () => `id-${(sequence += 1)}` };
+    const clock = { now: () => at };
     useCase = new SubmitWagerTransactionUseCase(
       transactions,
       wagers,
       wallets,
-      { next: () => `id-${(sequence += 1)}` },
-      { now: () => at },
-      outbox,
+      ids,
+      clock,
+      new WagerTransactionSettlement(wagers, ids, clock, outbox),
     );
   });
 

@@ -21,7 +21,8 @@ export const submitWagerTransactionRequest = z.strictObject({
   walletId: uuid,
   roundId: identifier,
   gameId: identifier,
-  kind: z.enum(['OPENING', 'BET', 'WIN', 'LOSS']),
+  kind: z.enum(['OPENING', 'BET', 'WIN', 'LOSS', 'REFUND', 'ROLLBACK']),
+  referenceExternalTransactionId: identifier.optional(),
   money: z.strictObject({
     amount: z.string(),
     currency: z.string(),
