@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
-import { Money } from '../../../src/modules/@shared/domain/money';
 import {
   CurrencyMismatchError,
   InvalidCurrencyError,
   InvalidMoneyError,
   MoneyOverflowError,
 } from '../../../src/modules/@shared/domain/errors/money.errors';
+import { Money } from '../../../src/modules/@shared/domain/money';
 
 const brl = (amount: string): Money => Money.from({ amount, currency: 'BRL' });
 

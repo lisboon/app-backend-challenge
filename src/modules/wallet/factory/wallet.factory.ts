@@ -1,7 +1,7 @@
 import type { TransactionManager } from '../../@shared/domain/transaction/transaction-manager';
-import { OutboxRepository } from '../../@shared/repository/outbox.repository';
 import type { Clock } from '../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../@shared/gateway/id-generator.gateway';
+import { OutboxMessageRepository } from '../../@shared/repository/outbox-message.repository';
 import { OpeningTransactionRepository } from '../../wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../wagering/repository/wager-transaction.repository';
 import type { ReconciliationMonitor } from '../gateway/reconciliation-monitor.gateway';
@@ -30,7 +30,7 @@ export const WalletFactory = {
   create(dependencies: WalletFactoryDependencies): WalletUseCases {
     const wallets = new WalletRepository();
     const ledger = new LedgerRepository();
-    const outbox = new OutboxRepository();
+    const outbox = new OutboxMessageRepository();
     return {
       reconcile: new ReconcileWalletUseCase(
         dependencies.transactions,

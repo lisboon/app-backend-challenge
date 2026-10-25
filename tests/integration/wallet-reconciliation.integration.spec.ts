@@ -3,21 +3,21 @@ import { Logger, type INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { Registry } from 'prom-client';
 
-import { startApp } from '../support/http-app';
+import {
+  MikroOrmTransactionManager,
+  entityManagerOf,
+} from '../../src/infra/database/mikro-orm-transaction-manager';
+import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
+import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
+import { ReconcileWalletUseCase } from '../../src/modules/wallet/usecase/reconcile-wallet/reconcile-wallet.usecase';
 import {
   openTestOrm,
   migrateFresh,
   ledgerMatchesBalance,
   failureOf,
 } from '../support/database';
+import { startApp } from '../support/http-app';
 import { debitWallet } from '../support/ledger';
-import {
-  MikroOrmTransactionManager,
-  entityManagerOf,
-} from '../../src/infra/database/mikro-orm-transaction-manager';
-import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
-import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
-import { ReconcileWalletUseCase } from '../../src/modules/wallet/usecase/reconcile-wallet/reconcile-wallet.usecase';
 
 describe('reconciliação com infraestrutura real', () => {
   let orm: MikroORM;

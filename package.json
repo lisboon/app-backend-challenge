@@ -12,7 +12,7 @@
     "migrate:down": "bun src/infra/database/migrate.ts down",
     "migrate:status": "bun src/infra/database/migrate.ts status",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "lint": "oxlint --type-aware src/ tests/",
+    "lint": "oxlint --type-aware src/ tests/ scripts/ && bun scripts/check-imports.ts",
     "test": "bun test tests/unit",
     "test:watch": "bun test --watch tests/unit",
     "test:cov": "bun test --coverage tests/unit",

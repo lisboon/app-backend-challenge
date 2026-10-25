@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 
-import type { OutboxMessage } from '../../../src/modules/@shared/domain/outbox/outbox-message.entity';
-import type { OutboxGateway } from '../../../src/modules/@shared/gateway/outbox.gateway';
 import { WalletNotFoundError } from '../../../src/modules/@shared/domain/errors/wallet-not-found.error';
 import { FailureCode } from '../../../src/modules/@shared/domain/failure-code';
 import { Money } from '../../../src/modules/@shared/domain/money';
+import type { OutboxMessage } from '../../../src/modules/@shared/domain/outbox/outbox-message.entity';
 import {
   TransactionContext,
   type TransactionManager,
 } from '../../../src/modules/@shared/domain/transaction/transaction-manager';
+import type { OutboxGateway } from '../../../src/modules/@shared/gateway/outbox.gateway';
 import {
   IdempotencyPayloadConflictError,
   IdempotencyRaceError,

@@ -1,5 +1,5 @@
-import type { BaseUseCase } from '../../../@shared/usecase/base.usecase';
 import type { MoneyProps } from '../../../@shared/domain/money';
+import type { BaseUseCase } from '../../../@shared/usecase/base.usecase';
 
 export interface ReconcileWalletUseCaseInputDto {
   walletId: string;

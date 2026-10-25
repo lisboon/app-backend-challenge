@@ -4,6 +4,7 @@ import {
   type SQSClient,
 } from '@aws-sdk/client-sqs';
 
+import { EventPublicationError } from '../../modules/@shared/domain/errors/infrastructure.errors';
 import type { OutboxMessage } from '../../modules/@shared/domain/outbox/outbox-message.entity';
 import type { EventPublisherGateway } from '../../modules/@shared/gateway/event-publisher.gateway';
 
@@ -41,7 +42,7 @@ export class SqsEventPublisher implements EventPublisherGateway {
       ) {
         this.queueUrl = undefined;
       }
-      throw error;
+      throw publicationErrorOf(error);
     }
   }
 
@@ -64,4 +65,17 @@ export class SqsEventPublisher implements EventPublisherGateway {
       throw error;
     }
   }
+}
+
+function publicationErrorOf(error: unknown): EventPublicationError {
+  if (!(error instanceof Error)) {
+    return new EventPublicationError('UnknownError');
+  }
+  const failure = error as Error & { Code?: unknown; code?: unknown };
+  const code = failure.Code ?? failure.code;
+  return new EventPublicationError(
+    typeof code === 'string' && /^[A-Za-z0-9_.-]{2,64}$/.test(code)
+      ? code
+      : error.constructor.name,
+  );
 }

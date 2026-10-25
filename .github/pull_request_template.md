@@ -11,6 +11,14 @@
 <!-- Cada decisão não óbvia, com a alternativa descartada e o motivo. O que for
      permanente também vai para o ARCHITECTURE.md. -->
 
+## Arquivos novos
+
+| Arquivo | Linha do mapa (`AGENTS.md`) |
+|---|---|
+| | |
+
+<!-- Arquivo fora do mapa: atualize o mapa neste PR e explique aqui. -->
+
 ## Como foi verificado
 
 | Comando | Resultado |

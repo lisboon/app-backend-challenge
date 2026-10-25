@@ -5,13 +5,15 @@ import type {
   OutboxGateway,
   PendingOutboxGateway,
 } from '../gateway/outbox.gateway';
+import { OutboxMessageModel } from './outbox-message.model';
 import {
   OutboxMessageModelMapper,
   type OutboxRow,
 } from './outbox-message.model.mapper';
-import { OutboxMessageModel } from './outbox-message.model';
 
-export class OutboxRepository implements OutboxGateway, PendingOutboxGateway {
+export class OutboxMessageRepository
+  implements OutboxGateway, PendingOutboxGateway
+{
   async findDue(
     now: Date,
     limit: number,

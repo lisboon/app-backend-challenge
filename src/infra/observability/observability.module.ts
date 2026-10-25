@@ -1,8 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { Registry } from 'prom-client';
 
-import { PrometheusOutboxMonitor } from './outbox-monitor';
 import { MetricsController } from './metrics.controller';
+import { PrometheusOutboxMonitor } from './outbox-monitor';
 import { PrometheusReconciliationMonitor } from './reconciliation-monitor';
 
 export const OUTBOX_MONITOR = Symbol('OUTBOX_MONITOR');

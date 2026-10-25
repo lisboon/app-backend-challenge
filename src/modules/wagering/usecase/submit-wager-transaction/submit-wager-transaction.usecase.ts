@@ -1,18 +1,18 @@
-import type { EventContext } from '../../../@shared/domain/event/integration-event';
-import { OutboxMessage } from '../../../@shared/domain/outbox/outbox-message.entity';
-import type { OutboxGateway } from '../../../@shared/gateway/outbox.gateway';
-import { WagerTransactionProcessed } from '../../event/wager-transaction-processed.event';
-import { WagerTransactionRejected } from '../../event/wager-transaction-rejected.event';
 import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
+import type { EventContext } from '../../../@shared/domain/event/integration-event';
 import { Money } from '../../../@shared/domain/money';
+import { OutboxMessage } from '../../../@shared/domain/outbox/outbox-message.entity';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../../@shared/gateway/id-generator.gateway';
+import type { OutboxGateway } from '../../../@shared/gateway/outbox.gateway';
 import {
   IdempotencyPayloadConflictError,
   IdempotencyRaceError,
 } from '../../domain/errors/wagering.errors';
 import { WagerTransaction } from '../../domain/wager-transaction.entity';
+import { WagerTransactionProcessed } from '../../event/wager-transaction-processed.event';
+import { WagerTransactionRejected } from '../../event/wager-transaction-rejected.event';
 import type { WagerTransactionGateway } from '../../gateway/wager-transaction.gateway';
 import type {
   LockedWallet,

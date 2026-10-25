@@ -9,10 +9,10 @@ import {
 } from '@aws-sdk/client-sqs';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
+import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { IntegrationEvent } from '../../src/modules/@shared/domain/event/integration-event';
 import { OutboxMessage } from '../../src/modules/@shared/domain/outbox/outbox-message.entity';
-import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
-import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
+import { OutboxMessageRepository } from '../../src/modules/@shared/repository/outbox-message.repository';
 import { testInfra } from './http-app';
 
 export interface TestEventData {
@@ -89,7 +89,7 @@ export async function seedOutbox(
     ),
   );
 
-  const repository = new OutboxRepository();
+  const repository = new OutboxMessageRepository();
   await new MikroOrmTransactionManager(orm).execute(async (trx) => {
     for (const [index, message] of messages.entries()) {
       await repository.create(transform?.(message, index) ?? message, trx);

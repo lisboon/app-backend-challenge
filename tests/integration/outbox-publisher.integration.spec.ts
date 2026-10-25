@@ -13,7 +13,6 @@ import { Logger } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { Registry } from 'prom-client';
 
-import { deferred, eventually } from '../support/async';
 import {
   entityManagerOf,
   MikroOrmTransactionManager,
@@ -23,15 +22,14 @@ import { SqsEventPublisher } from '../../src/infra/queue/sqs-event-publisher';
 import { OutboxMessage } from '../../src/modules/@shared/domain/outbox/outbox-message.entity';
 import type { TransactionManager } from '../../src/modules/@shared/domain/transaction/transaction-manager';
 import type { EventPublisherGateway } from '../../src/modules/@shared/gateway/event-publisher.gateway';
-import { OutboxRepository } from '../../src/modules/@shared/repository/outbox.repository';
+import { OutboxMessageRepository } from '../../src/modules/@shared/repository/outbox-message.repository';
 import { PublishOutboxUseCase } from '../../src/modules/@shared/usecase/publish-outbox/publish-outbox.usecase';
+import { deferred, eventually } from '../support/async';
 import {
   openTestOrm,
   migrateFresh,
   ledgerMatchesBalance,
 } from '../support/database';
-import { freePort, spawnApp, testAppEnv, waitReady } from '../support/process';
-import { retryTransient } from '../support/retry-transient';
 import {
   eventsQueue,
   queueIsEmpty,
@@ -39,6 +37,8 @@ import {
   seedOutbox,
   testSqs,
 } from '../support/outbox';
+import { freePort, spawnApp, testAppEnv, waitReady } from '../support/process';
+import { retryTransient } from '../support/retry-transient';
 
 const clock = { now: () => new Date() };
 
@@ -78,7 +78,7 @@ describe('publicação da outbox com PostgreSQL e SQS reais', () => {
   ) =>
     new PublishOutboxUseCase(
       transactions,
-      new OutboxRepository(),
+      new OutboxMessageRepository(),
       gateway,
       now,
       monitor,
@@ -170,7 +170,7 @@ describe('publicação da outbox com PostgreSQL e SQS reais', () => {
   it('publica somente depois do commit financeiro', async () => {
     const staged = deferred();
     const release = deferred();
-    const repository = new OutboxRepository();
+    const repository = new OutboxMessageRepository();
     const [message] = await seedOutbox(orm, 1);
     await publisher().execute({ limit: 10 });
     await receiveEvents(sqs, queue.url, 1);
@@ -406,7 +406,7 @@ describe('publicação da outbox com PostgreSQL e SQS reais', () => {
     await instance.execute({ limit: 10 });
     expect(
       await new MikroOrmTransactionManager(orm).execute((trx) =>
-        new OutboxRepository().findDue(new Date(), 10, trx),
+        new OutboxMessageRepository().findDue(new Date(), 10, trx),
       ),
     ).toEqual([]);
     expect(await instance.execute({ limit: 10 })).toEqual({ attempted: 0 });
@@ -426,7 +426,7 @@ describe('publicação da outbox com PostgreSQL e SQS reais', () => {
       },
     );
     const transactions = new MikroOrmTransactionManager(orm);
-    const repository = new OutboxRepository();
+    const repository = new OutboxMessageRepository();
     const due = await transactions.execute((trx) =>
       repository.findDue(at, 10, trx),
     );
@@ -442,7 +442,7 @@ describe('publicação da outbox com PostgreSQL e SQS reais', () => {
   it('o SQL revalida a cabeça publicada depois do snapshot antes de capturar a wallet', async () => {
     const messages = await seedOutbox(orm, 2, Bun.randomUUIDv7());
     const transactions = new MikroOrmTransactionManager(orm);
-    const repository = new OutboxRepository();
+    const repository = new OutboxMessageRepository();
     await transactions.execute(async (trx) => {
       const em = entityManagerOf(trx);
       await em.execute(

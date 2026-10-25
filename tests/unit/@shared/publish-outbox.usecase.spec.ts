@@ -5,8 +5,8 @@ import {
   TransactionContext,
   type TransactionManager,
 } from '../../../src/modules/@shared/domain/transaction/transaction-manager';
-import type { PendingOutboxGateway } from '../../../src/modules/@shared/gateway/outbox.gateway';
 import type { OutboxMonitor } from '../../../src/modules/@shared/gateway/outbox-monitor.gateway';
+import type { PendingOutboxGateway } from '../../../src/modules/@shared/gateway/outbox.gateway';
 import { PublishOutboxUseCase } from '../../../src/modules/@shared/usecase/publish-outbox/publish-outbox.usecase';
 
 class FakeContext extends TransactionContext {
