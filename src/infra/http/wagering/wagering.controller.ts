@@ -16,12 +16,14 @@ import { WagerTransactionStatus } from '../../../modules/wagering/domain/wager-t
 import type { WageringUseCases } from '../../../modules/wagering/factory/wagering.factory';
 import type { SubmitWagerTransactionUseCaseOutputDto } from '../../../modules/wagering/usecase/submit/submit.usecase.dto';
 import type { WagerTransactionOutputDto } from '../../../modules/wagering/usecase/wager-transaction.output.dto';
+import {
+  idempotencyKey,
+  submitWagerTransactionContract,
+} from '../../contract/wager-transaction.contract';
 import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';
 import {
-  idempotencyKey,
   providerTransactionParams,
-  submitWagerTransactionRequest,
   transactionIdParam,
 } from './wagering.request';
 
@@ -41,7 +43,7 @@ export class WageringController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<SubmitWagerTransactionUseCaseOutputDto> {
     const result = await this.useCases.submit.execute({
-      ...parseRequest(submitWagerTransactionRequest, body),
+      ...parseRequest(submitWagerTransactionContract, body),
       idempotencyKey: idempotencyKeyFrom(key),
       correlationId,
     });
