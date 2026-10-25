@@ -2,6 +2,8 @@ export interface AppConfig {
   port: number;
   workerMetricsPort: number;
   outboxPollIntervalMs: number;
+  pendingReferencePollIntervalMs: number;
+  pendingReferenceTtlSeconds: number;
   databaseUrl: string;
   sqs: {
     region: string;
@@ -62,6 +64,22 @@ export function loadConfig(env: Env): AppConfig {
       problems,
     ),
     databaseUrl,
+    pendingReferencePollIntervalMs: parseInteger(
+      env.PENDING_REFERENCE_POLL_INTERVAL_MS,
+      'PENDING_REFERENCE_POLL_INTERVAL_MS',
+      1000,
+      1,
+      2_147_483_647,
+      problems,
+    ),
+    pendingReferenceTtlSeconds: parseInteger(
+      env.PENDING_REFERENCE_TTL_SECONDS,
+      'PENDING_REFERENCE_TTL_SECONDS',
+      3600,
+      1,
+      2_147_483_647,
+      problems,
+    ),
     sqs: {
       region: required('AWS_REGION'),
       endpoint: env.SQS_ENDPOINT?.trim() || undefined,

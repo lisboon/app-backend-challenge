@@ -48,7 +48,9 @@ export class WageringController {
     response.status(
       result.status === WagerTransactionStatus.Rejected
         ? HttpStatus.UNPROCESSABLE_ENTITY
-        : HttpStatus.CREATED,
+        : result.status === WagerTransactionStatus.PendingReference
+          ? HttpStatus.ACCEPTED
+          : HttpStatus.CREATED,
     );
     return result;
   }

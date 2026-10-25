@@ -7,7 +7,11 @@ import {
   WageringFactory,
   type WageringUseCases,
 } from '../../../modules/wagering/factory/wagering.factory';
+import type { PendingReferenceMonitor } from '../../../modules/wagering/gateway/pending-reference-monitor.gateway';
+import type { AppConfig } from '../../config/app-config';
+import { APP_CONFIG } from '../../config/config.module';
 import { TRANSACTION_MANAGER } from '../../database/database.module';
+import { PENDING_REFERENCE_MONITOR } from '../../observability/observability.module';
 import { CLOCK, ID_GENERATOR } from '../../runtime/runtime.module';
 import { WAGERING_USE_CASES, WageringController } from './wagering.controller';
 
@@ -16,13 +20,27 @@ import { WAGERING_USE_CASES, WageringController } from './wagering.controller';
   providers: [
     {
       provide: WAGERING_USE_CASES,
-      inject: [TRANSACTION_MANAGER, ID_GENERATOR, CLOCK],
+      inject: [
+        TRANSACTION_MANAGER,
+        ID_GENERATOR,
+        CLOCK,
+        PENDING_REFERENCE_MONITOR,
+        APP_CONFIG,
+      ],
       useFactory: (
         transactions: TransactionManager,
         ids: IdGenerator,
         clock: Clock,
+        pendingMonitor: PendingReferenceMonitor,
+        config: AppConfig,
       ): WageringUseCases =>
-        WageringFactory.create({ transactions, ids, clock }),
+        WageringFactory.create({
+          transactions,
+          ids,
+          clock,
+          pendingMonitor,
+          pendingReferenceTtlSeconds: config.pendingReferenceTtlSeconds,
+        }),
     },
   ],
 })

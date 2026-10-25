@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 
+import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { Money } from '../../src/modules/@shared/domain/money';
+import { WagerTransaction } from '../../src/modules/wagering/domain/wager-transaction.entity';
+import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
+import { deferred } from '../support/async';
 import {
   failureOf,
   ledgerMatchesBalance,
@@ -49,6 +53,10 @@ interface TransactionRow {
   status?: string;
   failureCode?: string | null;
   referenceExternalTransactionId?: string | null;
+  referenceTransactionId?: string | null;
+  referenceAttempts?: number;
+  nextReferenceAttemptAt?: Date | null;
+  correlationId?: string | null;
   resultBalance?: string | null;
   resultCurrency?: string | null;
 }
@@ -75,8 +83,9 @@ const insertTransaction = (em: EntityManager, tx: TransactionRow) => {
     `insert into wager_transactions
        (id, provider_id, external_transaction_id, idempotency_key, payload_hash, wallet_id,
         player_id, currency, round_id, game_id, kind, amount, reference_external_transaction_id,
-        status, failure_code, result_balance, result_currency, created_at, processed_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), ${terminal ? 'now()' : 'null'})`,
+        status, failure_code, result_balance, result_currency, created_at, processed_at, correlation_id,
+        reference_transaction_id, reference_attempts, next_reference_attempt_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), ${terminal ? 'now()' : 'null'}, ?, ?, ?, ?)`,
     [
       tx.id,
       providerId,
@@ -103,6 +112,14 @@ const insertTransaction = (em: EntityManager, tx: TransactionRow) => {
         : tx.resultCurrency === undefined
           ? 'BRL'
           : tx.resultCurrency,
+      tx.correlationId === undefined ? tx.id : tx.correlationId,
+      tx.referenceTransactionId ?? null,
+      tx.referenceAttempts ?? 0,
+      tx.nextReferenceAttemptAt === undefined
+        ? status === 'PENDING_REFERENCE'
+          ? new Date()
+          : null
+        : tx.nextReferenceAttemptAt,
     ],
   );
 };
@@ -240,7 +257,7 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(Number(await objects())).toBe(0);
 
       await orm.migrator.up();
-      expect(Number(await objects())).toBe(13);
+      expect(Number(await objects())).toBe(18);
     });
 
     it('reverter a última migration preserva rejeições gravadas em outra moeda', async () => {
@@ -858,6 +875,657 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(failure.code).toBe('23514');
       expect(failure.message).toContain(message);
     });
+  });
+
+  describe('referências e reversões', () => {
+    const invariant = async (walletId: string) => {
+      const balance = await ledgerMatchesBalance(orm, walletId);
+      expect(balance.stored).toBe(balance.rebuilt);
+    };
+    const rawMove = async (
+      opened: OpenedWallet,
+      kind: string,
+      referenceId?: string,
+      overrides: Partial<TransactionRow> & { direction?: string } = {},
+    ) => {
+      const id = uuid();
+      await inTransaction(async (em) => {
+        const [wallet] = await em.execute<
+          { balance: string; version: number }[]
+        >('select balance::text,version from wallets where id=? for update', [
+          opened.walletId,
+        ]);
+        const [reference] = referenceId
+          ? await em.execute<
+              { kind: string; external_transaction_id: string }[]
+            >(
+              'select kind,external_transaction_id from wager_transactions where id=?',
+              [referenceId],
+            )
+          : [];
+        const direction =
+          overrides.direction ??
+          (kind === 'BET' || (kind === 'ROLLBACK' && reference?.kind !== 'BET')
+            ? 'DEBIT'
+            : 'CREDIT');
+        const money = Money.from({
+          amount: overrides.amount ?? '25.00',
+          currency: 'BRL',
+        });
+        const before = Money.from({ amount: wallet.balance, currency: 'BRL' });
+        const after =
+          direction === 'CREDIT' ? before.add(money) : before.subtract(money);
+        await insertTransaction(em, {
+          id,
+          walletId: opened.walletId,
+          playerId: opened.playerId,
+          currency: 'BRL',
+          amount: money.toString(),
+          kind,
+          referenceExternalTransactionId: reference?.external_transaction_id,
+          referenceTransactionId: referenceId,
+          resultBalance: after.toString(),
+          ...overrides,
+        });
+        await insertEntry(em, {
+          walletId: opened.walletId,
+          transactionId: id,
+          direction,
+          amount: money.toString(),
+          before: before.toString(),
+          after: after.toString(),
+          version: wallet.version + 1,
+        });
+        await em.execute('update wallets set balance=?,version=? where id=?', [
+          after.toString(),
+          wallet.version + 1,
+          opened.walletId,
+        ]);
+      });
+      await invariant(opened.walletId);
+      return id;
+    };
+    const bet = async () => {
+      const opened = await openWallet('100.00');
+      return { opened, id: await rawMove(opened, 'BET') };
+    };
+    const pending = async (
+      opened: OpenedWallet,
+      overrides: Partial<TransactionRow> = {},
+    ) => {
+      const id = uuid();
+      await inTransaction((em) =>
+        insertTransaction(em, {
+          id,
+          walletId: opened.walletId,
+          playerId: opened.playerId,
+          currency: 'BRL',
+          amount: '25.00',
+          kind: 'REFUND',
+          status: 'PENDING_REFERENCE',
+          referenceExternalTransactionId: 'missing',
+          ...overrides,
+        }),
+      );
+      return id;
+    };
+
+    it.each([
+      [
+        'tentativas negativas',
+        { referenceAttempts: -1 },
+        'wager_tx_reference_attempts_ck',
+      ],
+      [
+        'pendente sem próxima tentativa',
+        { nextReferenceAttemptAt: null },
+        'wager_tx_pending_reference_ck',
+      ],
+      [
+        'próxima tentativa em estado comum',
+        { kind: 'WIN', status: 'PENDING', nextReferenceAttemptAt: new Date() },
+        'wager_tx_pending_reference_ck',
+      ],
+      [
+        'pendente sem referência externa',
+        { kind: 'WIN', referenceExternalTransactionId: null },
+        'wager_tx_pending_reference_ck',
+      ],
+      [
+        'BET com referência externa',
+        { kind: 'BET', status: 'PENDING' },
+        'wager_tx_reference_not_allowed_ck',
+      ],
+      [
+        'referência interna em pendente',
+        { referenceTransactionId: uuid() },
+        'wager_tx_reference_state_ck',
+      ],
+      [
+        'processada com externa sem interna',
+        { status: 'PROCESSED' },
+        'wager_tx_reference_state_ck',
+      ],
+    ] as const)('SQL cru recusa %s', async (_name, changes, constraint) => {
+      const opened = await openWallet('100.00');
+      expect(
+        await failureOf(() => pending(opened, { ...changes })),
+      ).toMatchObject({ code: '23514', constraint });
+      await invariant(opened.walletId);
+    });
+
+    it('SQL cru recusa transação que referencia a si mesma', async () => {
+      const opened = await openWallet('100.00');
+      const id = uuid();
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            insertTransaction(em, {
+              id,
+              walletId: opened.walletId,
+              playerId: opened.playerId,
+              currency: 'BRL',
+              amount: '25.00',
+              kind: 'REFUND',
+              status: 'PENDING_REFERENCE',
+              referenceExternalTransactionId: `ext-${id}`,
+            }),
+          ),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'wager_tx_reference_not_self_ck',
+      });
+    });
+
+    it('correlation_id é obrigatório e tem NOT NULL nomeado', async () => {
+      const opened = await openWallet('0.00');
+      expect(
+        await failureOf(() => pending(opened, { correlationId: null })),
+      ).toMatchObject({ code: '23502' });
+      const names = await orm.em
+        .fork()
+        .execute<{ conname: string }[]>(
+          "select conname from pg_constraint where conrelid='wager_transactions'::regclass and conname='wager_transactions_correlation_id_not_null'",
+        );
+      expect(names).toEqual([
+        { conname: 'wager_transactions_correlation_id_not_null' },
+      ]);
+      await invariant(opened.walletId);
+    });
+
+    it('FK composta recusa referência de outra wallet', async () => {
+      const original = await bet();
+      const other = await openWallet('100.00');
+      expect(
+        await failureOf(() => rawMove(other, 'REFUND', original.id)),
+      ).toMatchObject({
+        code: '23503',
+        constraint: 'wager_tx_reference_wallet_fk',
+      });
+      await invariant(original.opened.walletId);
+      await invariant(other.walletId);
+    });
+
+    it('índice único recusa duas reversões do mesmo tipo', async () => {
+      const { opened, id } = await bet();
+      await rawMove(opened, 'REFUND', id);
+      expect(
+        await failureOf(() => rawMove(opened, 'REFUND', id)),
+      ).toMatchObject({
+        code: '23505',
+        constraint: 'wager_tx_single_reversal_uk',
+      });
+      await invariant(opened.walletId);
+    });
+
+    it.each(['create', 'update'] as const)(
+      'repositório traduz o 23505 de reversão em %s',
+      async (method) => {
+        const { opened, id } = await bet();
+        await rawMove(opened, 'REFUND', id);
+        const transaction = WagerTransaction.create({
+          correlationId: 'correlation',
+          id: uuid(),
+          providerId: 'provider-a',
+          externalTransactionId: uuid(),
+          idempotencyKey: uuid(),
+          walletId: opened.walletId,
+          playerId: opened.playerId,
+          roundId: 'round-1',
+          gameId: 'game-1',
+          kind: 'REFUND',
+          money: Money.from({ amount: '25.00', currency: 'BRL' }),
+          at: new Date(),
+          referenceExternalTransactionId: `ext-${id}`,
+        });
+        const repository = new WagerTransactionRepository();
+        const manager = new MikroOrmTransactionManager(orm);
+        if (method === 'update') {
+          transaction.markPendingReference(new Date(), 3600);
+          await manager.execute((trx) => repository.create(transaction, trx));
+        }
+        transaction.markProcessed(
+          Money.from({ amount: '100.00', currency: 'BRL' }),
+          new Date(),
+          id,
+        );
+        const error: unknown = await manager
+          .execute((trx) => repository[method](transaction, trx))
+          .catch((caught: unknown) => caught);
+        expect(error).toMatchObject({
+          failureCode: 'REFERENCE_ALREADY_REVERSED',
+        });
+        await invariant(opened.walletId);
+      },
+    );
+
+    it.each(['REFUND', 'ROLLBACK'] as const)(
+      'trigger impede reversão líquida duplicada começando por %s',
+      async (first) => {
+        const { opened, id } = await bet();
+        await rawMove(opened, first, id);
+        const next = first === 'REFUND' ? 'ROLLBACK' : 'REFUND';
+        expect(await failureOf(() => rawMove(opened, next, id))).toMatchObject({
+          code: '23514',
+          constraint: 'wager_transactions_single_net_reversal',
+        });
+        await invariant(opened.walletId);
+      },
+    );
+
+    it.each(['REFUND', 'ROLLBACK'] as const)(
+      'trigger impede WIN sobre BET revertido por %s',
+      async (reversal) => {
+        const { opened, id } = await bet();
+        await rawMove(opened, reversal, id);
+        expect(await failureOf(() => rawMove(opened, 'WIN', id))).toMatchObject(
+          {
+            code: '23514',
+            constraint: 'wager_transactions_single_net_reversal',
+          },
+        );
+        await invariant(opened.walletId);
+      },
+    );
+
+    it('WIN sobre BET cujo REFUND foi desfeito é aceito', async () => {
+      const { opened, id } = await bet();
+      const refund = await rawMove(opened, 'REFUND', id);
+      await rawMove(opened, 'ROLLBACK', refund);
+      await rawMove(opened, 'WIN', id);
+      await rawMove(opened, 'WIN', id);
+      expect(await ledgerMatchesBalance(orm, opened.walletId)).toEqual({
+        stored: '125.00',
+        rebuilt: '125.00',
+      });
+    });
+
+    it('REFUND desfeito permite ROLLBACK do BET e mantém saldo 100', async () => {
+      const { opened, id } = await bet();
+      const refund = await rawMove(opened, 'REFUND', id);
+      await rawMove(opened, 'ROLLBACK', refund);
+      await rawMove(opened, 'ROLLBACK', id);
+      expect(await ledgerMatchesBalance(orm, opened.walletId)).toEqual({
+        stored: '100.00',
+        rebuilt: '100.00',
+      });
+    });
+
+    it.each([
+      ['estado', { status: 'REJECTED', failureCode: 'INSUFFICIENT_BALANCE' }],
+      ['tipo', { kind: 'WIN' }],
+      ['player', { playerId: uuid() }],
+      ['moeda', { currency: 'USD' }],
+      ['rodada', { roundId: 'other' }],
+      ['provedor', { providerId: 'other' }],
+      ['valor', { amount: '24.00' }],
+    ] as const)(
+      'trigger recusa referência com %s incompatível',
+      async (field, change) => {
+        const opened = await openWallet('100.00');
+        let referenceId: string;
+        if (field === 'estado') {
+          referenceId = uuid();
+          await inTransaction((em) =>
+            insertTransaction(em, {
+              id: referenceId,
+              walletId: opened.walletId,
+              playerId: opened.playerId,
+              currency: 'BRL',
+              amount: '25.00',
+              kind: 'BET',
+              ...change,
+            }),
+          );
+        } else {
+          referenceId = await rawMove(opened, field === 'tipo' ? 'WIN' : 'BET');
+        }
+        const overrides = field === 'estado' || field === 'tipo' ? {} : change;
+        expect(
+          await failureOf(() =>
+            rawMove(opened, 'REFUND', referenceId, overrides),
+          ),
+        ).toMatchObject({
+          code: '23514',
+          constraint: 'wager_transactions_reference_valid',
+        });
+        await invariant(opened.walletId);
+      },
+    );
+
+    it('trigger do ledger recusa crédito para ROLLBACK de WIN', async () => {
+      const opened = await openWallet('100.00');
+      const win = await rawMove(opened, 'WIN');
+      expect(
+        await failureOf(() =>
+          rawMove(opened, 'ROLLBACK', win, { direction: 'CREDIT' }),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'wallet_ledger_entries_match_transaction',
+      });
+      await invariant(opened.walletId);
+    });
+
+    it('índices de vencimento e aceleração são parciais para pendentes', async () => {
+      const indexes = await orm.em
+        .fork()
+        .execute<{ indexname: string; indexdef: string }[]>(
+          "select indexname,indexdef from pg_indexes where indexname in ('wager_tx_pending_due_idx','wager_tx_pending_reference_idx') order by indexname",
+        );
+      expect(indexes).toHaveLength(2);
+      expect(indexes[0].indexdef).toContain('next_reference_attempt_at');
+      expect(indexes[1].indexdef).toContain(
+        'provider_id, reference_external_transaction_id',
+      );
+      expect(
+        indexes.every((index) => index.indexdef.includes('PENDING_REFERENCE')),
+      ).toBe(true);
+    });
+
+    it('round-trip com dados preserva transações e ledger e preenche correlação legada', async () => {
+      const { opened, id } = await bet();
+      const waiting = await pending(opened);
+      await orm.migrator.down({ to: 'Migration20261024000004OutboxOrdering' });
+      const before = await orm.em
+        .fork()
+        .execute<{ id: string }[]>(
+          'select id from wager_transactions where id in (?,?) order by id',
+          [id, waiting],
+        );
+      await orm.migrator.up();
+      const after = await orm.em.fork().execute<
+        {
+          id: string;
+          correlation_id: string;
+          reference_attempts: number;
+          next_reference_attempt_at: string | null;
+        }[]
+      >('select id,correlation_id,reference_attempts,next_reference_attempt_at from wager_transactions where id in (?,?) order by id', [id, waiting]);
+      expect(after.map((row) => row.id)).toEqual(before.map((row) => row.id));
+      expect(
+        after.every(
+          (row) =>
+            row.correlation_id === row.id && row.reference_attempts === 0,
+        ),
+      ).toBe(true);
+      expect(
+        after.find((row) => row.id === waiting)?.next_reference_attempt_at,
+      ).not.toBeNull();
+      await invariant(opened.walletId);
+    });
+
+    it('SQL cru permite pendência, retry sem transição e rejeição, mas não volta a PENDING nem avança para FAILED', async () => {
+      const opened = await openWallet('0.00');
+      const id = await pending(opened, {
+        status: 'PENDING',
+        nextReferenceAttemptAt: null,
+      });
+      await inTransaction((em) =>
+        em.execute(
+          "update wager_transactions set status='PENDING_REFERENCE',next_reference_attempt_at=now() where id=?",
+          [id],
+        ),
+      );
+      await inTransaction((em) =>
+        em.execute(
+          "update wager_transactions set reference_attempts=1,next_reference_attempt_at=now()+interval '1 second' where id=?",
+          [id],
+        ),
+      );
+      for (const status of ['PENDING', 'FAILED']) {
+        expect(
+          await failureOf(() =>
+            inTransaction((em) =>
+              em.execute('update wager_transactions set status=? where id=?', [
+                status,
+                id,
+              ]),
+            ),
+          ),
+        ).toMatchObject({
+          code: '23514',
+          constraint: 'wager_transactions_protect',
+        });
+      }
+      await inTransaction((em) =>
+        em.execute(
+          "update wager_transactions set status='REJECTED',failure_code='REFERENCE_NOT_FOUND',result_balance=0,result_currency='BRL',next_reference_attempt_at=null,processed_at=now() where id=?",
+          [id],
+        ),
+      );
+      const [saved] = await orm.em
+        .fork()
+        .execute<{ status: string; reference_attempts: number }[]>(
+          'select status,reference_attempts from wager_transactions where id=?',
+          [id],
+        );
+      expect(saved).toEqual({ status: 'REJECTED', reference_attempts: 1 });
+      await invariant(opened.walletId);
+    });
+
+    it('lock de pendente ignora uma linha já travada sem depender do lock da wallet', async () => {
+      const opened = await openWallet('0.00');
+      const id = await pending(opened);
+      const ready = deferred();
+      const release = deferred();
+      const holder = inTransaction(async (em) => {
+        await em.execute(
+          'select id from wager_transactions where id=? for update',
+          [id],
+        );
+        ready.resolve();
+        await release.promise;
+      });
+      await ready.promise;
+      const captured = new MikroOrmTransactionManager(orm).execute((trx) =>
+        new WagerTransactionRepository().lockPendingReference(id, trx),
+      );
+      try {
+        expect(
+          await Promise.race([captured, Bun.sleep(500).then(() => 'travou')]),
+        ).toBeNull();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([holder, captured]);
+      }
+      await invariant(opened.walletId);
+    });
+  });
+
+  describe('proteção de transações e identidade da wallet', () => {
+    const row = async (status = 'PENDING') => {
+      const opened = await openWallet('0.00');
+      const id = uuid();
+      await inTransaction((em) =>
+        insertTransaction(em, {
+          id,
+          walletId: opened.walletId,
+          playerId: opened.playerId,
+          currency: 'BRL',
+          amount: '0.00',
+          kind: 'LOSS',
+          status,
+          failureCode:
+            status === 'REJECTED' || status === 'FAILED'
+              ? 'TEST_FAILURE'
+              : null,
+        }),
+      );
+      return { ...opened, id };
+    };
+    it.each(['PROCESSED', 'REJECTED', 'FAILED'])(
+      'SQL cru recusa UPDATE terminal em %s, inclusive sem alteração',
+      async (status) => {
+        const { id, walletId } = await row(status);
+        for (const assignment of [
+          "status='PENDING'",
+          'reference_attempts=reference_attempts',
+        ]) {
+          expect(
+            await failureOf(() =>
+              inTransaction((em) =>
+                em.execute(
+                  'update wager_transactions set ' + assignment + ' where id=?',
+                  [id],
+                ),
+              ),
+            ),
+          ).toMatchObject({
+            code: '23514',
+            constraint: 'wager_transactions_protect',
+          });
+        }
+        expect(await ledgerMatchesBalance(orm, walletId)).toEqual({
+          stored: '0.00',
+          rebuilt: '0.00',
+        });
+      },
+    );
+    it.each(['PENDING', 'PROCESSED', 'REJECTED', 'FAILED'])(
+      'SQL cru recusa DELETE de %s',
+      async (status) => {
+        const { id } = await row(status);
+        expect(
+          await failureOf(() =>
+            inTransaction((em) =>
+              em.execute('delete from wager_transactions where id=?', [id]),
+            ),
+          ),
+        ).toMatchObject({
+          code: '23514',
+          constraint: 'wager_transactions_protect',
+        });
+      },
+    );
+    it('SQL cru recusa TRUNCATE mesmo com CASCADE', async () => {
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute('truncate wager_transactions cascade'),
+          ),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'wager_transactions_no_truncate',
+      });
+    });
+    it.each([
+      ['id', "'00000000-0000-0000-0000-000000000001'"],
+      ['provider_id', "'other-provider'"],
+      ['external_transaction_id', "'other-external'"],
+      ['idempotency_key', "'other-key'"],
+      ['payload_hash', "'v1:" + 'b'.repeat(64) + "'"],
+      ['wallet_id', "'00000000-0000-0000-0000-000000000001'"],
+      ['player_id', "'00000000-0000-0000-0000-000000000001'"],
+      ['currency', "'USD'"],
+      ['round_id', "'other-round'"],
+      ['game_id', "'other-game'"],
+      ['kind', "'WIN'"],
+      ['amount', "'1.00'"],
+      ['reference_external_transaction_id', "'other-ref'"],
+      ['created_at', "created_at+interval '1 second'"],
+      ['correlation_id', "'other-correlation'"],
+    ])(
+      'SQL cru recusa mudar identidade %s de uma pendente',
+      async (column, value) => {
+        const { id } = await row();
+        expect(
+          await failureOf(() =>
+            inTransaction((em) =>
+              em.execute(
+                'update wager_transactions set ' +
+                  column +
+                  '=' +
+                  value +
+                  ' where id=?',
+                [id],
+              ),
+            ),
+          ),
+        ).toMatchObject({
+          code: '23514',
+          constraint: 'wager_transactions_protect',
+        });
+      },
+    );
+    it.each(['id', 'player_id', 'currency'])(
+      'SQL cru recusa mudar %s da wallet',
+      async (column) => {
+        const { walletId } = await row();
+        const value = column === 'currency' ? 'USD' : uuid();
+        expect(
+          await failureOf(() =>
+            inTransaction((em) =>
+              em.execute('update wallets set ' + column + '=? where id=?', [
+                value,
+                walletId,
+              ]),
+            ),
+          ),
+        ).toMatchObject({ code: '23514', constraint: 'wallets_protect' });
+      },
+    );
+    it('SQL cru recusa transição de PENDING para FAILED', async () => {
+      const { id } = await row();
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "update wager_transactions set status='FAILED',failure_code='TEST',processed_at=now() where id=?",
+              [id],
+            ),
+          ),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'wager_transactions_protect',
+      });
+    });
+    it.each(['PROCESSED', 'REJECTED'])(
+      'SQL cru permite PENDING para %s',
+      async (status) => {
+        const { id, walletId } = await row();
+        await inTransaction((em) =>
+          em.execute(
+            "update wager_transactions set status=?,failure_code=?,result_balance=0,result_currency='BRL',processed_at=now() where id=?",
+            [status, status === 'REJECTED' ? 'TEST' : null, id],
+          ),
+        );
+        const [saved] = await orm.em
+          .fork()
+          .execute<{ status: string }[]>(
+            'select status from wager_transactions where id=?',
+            [id],
+          );
+        expect(saved.status).toBe(status);
+        expect(await ledgerMatchesBalance(orm, walletId)).toEqual({
+          stored: '0.00',
+          rebuilt: '0.00',
+        });
+      },
+    );
   });
 
   describe('outbox_messages', () => {

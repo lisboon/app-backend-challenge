@@ -21,6 +21,8 @@ export interface WagerTransactionOutputDto {
   balance: MoneyProps | null;
   createdAt: string;
   processedAt: string | null;
+  referenceExternalTransactionId: string | null;
+  referenceTransactionId: string | null;
 }
 
 export function toWagerTransactionOutput(
@@ -41,5 +43,8 @@ export function toWagerTransactionOutput(
     balance: transaction.resultBalance?.toJSON() ?? null,
     createdAt: transaction.createdAt.toISOString(),
     processedAt: transaction.processedAt?.toISOString() ?? null,
+    referenceExternalTransactionId:
+      transaction.referenceExternalTransactionId ?? null,
+    referenceTransactionId: transaction.referenceTransactionId ?? null,
   };
 }

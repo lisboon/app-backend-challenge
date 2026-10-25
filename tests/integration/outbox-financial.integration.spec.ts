@@ -8,6 +8,7 @@ import type { OutboxGateway } from '../../src/modules/@shared/gateway/outbox.gat
 import { OutboxMessageRepository } from '../../src/modules/@shared/repository/outbox-message.repository';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
 import { SubmitWagerTransactionUseCase } from '../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase';
+import { WagerTransactionSettlement } from '../../src/modules/wagering/usecase/wager-transaction-settlement';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
 import { WalletMovementRepository } from '../../src/modules/wallet/repository/wallet-movement.repository';
 import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
@@ -224,7 +225,13 @@ describe('eventos financeiros atômicos na outbox', () => {
         ),
         { next: uuid },
         { now: () => new Date() },
-        failing,
+        new WagerTransactionSettlement(
+          new WagerTransactionRepository(),
+          { next: uuid },
+          { now: () => new Date() },
+          failing,
+          3600,
+        ),
       );
       expect(
         await useCase
@@ -287,7 +294,13 @@ describe('eventos financeiros atômicos na outbox', () => {
         lock,
         { next: uuid },
         { now: () => now },
-        gateway,
+        new WagerTransactionSettlement(
+          new WagerTransactionRepository(),
+          { next: uuid },
+          { now: () => now },
+          gateway,
+          3600,
+        ),
       );
     const first = make(holding, realWallets).execute({
       ...body(wallet),

@@ -27,6 +27,7 @@ import type {
 } from '../../../src/modules/wagering/gateway/wallet-movement.gateway';
 import { SubmitWagerTransactionUseCase } from '../../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase';
 import type { SubmitWagerTransactionUseCaseInputDto } from '../../../src/modules/wagering/usecase/submit-wager-transaction/submit-wager-transaction.usecase.dto';
+import { WagerTransactionSettlement } from '../../../src/modules/wagering/usecase/wager-transaction-settlement';
 
 const at = new Date('2026-10-24T12:00:00.000Z');
 const brl = (amount: string): Money => Money.from({ amount, currency: 'BRL' });
@@ -69,6 +70,47 @@ class FakeWallets implements WalletMovementGateway {
 }
 
 class FakeWagers implements WagerTransactionGateway {
+  async update(): Promise<void> {}
+
+  async findDueReferences(now: Date): Promise<
+    {
+      id: string;
+      walletId: string;
+      providerId: string;
+      correlationId: string;
+    }[]
+  > {
+    return this.all()
+      .filter((t) => t.isReferenceDue(now))
+      .map((t) => ({
+        id: t.id,
+        walletId: t.walletId,
+        providerId: t.providerId,
+        correlationId: t.correlationId,
+      }));
+  }
+
+  async lockPendingReference(id: string): Promise<WagerTransaction | null> {
+    return (
+      this.all().find(
+        (t) =>
+          t.id === id && t.status === WagerTransactionStatus.PendingReference,
+      ) ?? null
+    );
+  }
+
+  async findReversals(id: string): Promise<WagerTransaction[]> {
+    return this.all().filter((t) => t.referenceTransactionId === id);
+  }
+
+  async accelerateReferences(): Promise<void> {}
+
+  async countPending(): Promise<number> {
+    return this.all().filter(
+      (t) => t.status === WagerTransactionStatus.PendingReference,
+    ).length;
+  }
+
   readonly stored: WagerTransaction[] = [];
 
   readonly committedElsewhere: WagerTransaction[] = [];
@@ -180,13 +222,15 @@ describe('SubmitWagerTransactionUseCase', () => {
     outbox = new FakeOutbox();
     transactions = new FakeTransactions(wallets, wagers, outbox);
     let sequence = 0;
+    const ids = { next: () => `id-${(sequence += 1)}` };
+    const clock = { now: () => at };
     useCase = new SubmitWagerTransactionUseCase(
       transactions,
       wagers,
       wallets,
-      { next: () => `id-${(sequence += 1)}` },
-      { now: () => at },
-      outbox,
+      ids,
+      clock,
+      new WagerTransactionSettlement(wagers, ids, clock, outbox, 3600),
     );
   });
 
@@ -293,6 +337,7 @@ describe('SubmitWagerTransactionUseCase', () => {
 
   it('perdendo a corrida pela chave, refaz uma vez e devolve o vencedor', async () => {
     const winner = WagerTransaction.create({
+      referenceExternalTransactionId: undefined,
       ...input(),
       id: 'winner',
       money: brl('30.00'),

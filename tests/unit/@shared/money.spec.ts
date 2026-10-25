@@ -200,6 +200,12 @@ describe('Money: comparação', () => {
     expect(brl('80.00').isLessThan(brl('80.00'))).toBe(false);
   });
 
+  it('canAdd aceita a soma no limite e recusa a que o excede, sem lançar', () => {
+    const max = brl('999999999999999999.98');
+    expect(max.canAdd(brl('0.01'))).toBe(true);
+    expect(max.canAdd(brl('0.02'))).toBe(false);
+  });
+
   it('considera iguais quantias de mesmo valor obtidas por caminhos diferentes', () => {
     expect(brl('10.00').add(brl('15.00')).equals(brl('25.00'))).toBe(true);
   });
@@ -212,6 +218,7 @@ describe('Money: conflito de moeda', () => {
     ['add', (m: Money) => m.add(usd)],
     ['subtract', (m: Money) => m.subtract(usd)],
     ['isLessThan', (m: Money) => m.isLessThan(usd)],
+    ['canAdd', (m: Money) => m.canAdd(usd)],
   ])('%s entre moedas diferentes falha em vez de converter', (_nome, op) => {
     expect(() => op(brl('1.00'))).toThrow(CurrencyMismatchError);
   });

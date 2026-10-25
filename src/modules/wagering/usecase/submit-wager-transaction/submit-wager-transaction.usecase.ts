@@ -1,24 +1,17 @@
 import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
-import type { EventContext } from '../../../@shared/domain/event/integration-event';
 import { Money } from '../../../@shared/domain/money';
-import { OutboxMessage } from '../../../@shared/domain/outbox/outbox-message.entity';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../../@shared/gateway/id-generator.gateway';
-import type { OutboxGateway } from '../../../@shared/gateway/outbox.gateway';
 import {
   IdempotencyPayloadConflictError,
   IdempotencyRaceError,
+  ReferenceAlreadyReversedError,
 } from '../../domain/errors/wagering.errors';
 import { WagerTransaction } from '../../domain/wager-transaction.entity';
-import { WagerTransactionProcessed } from '../../event/wager-transaction-processed.event';
-import { WagerTransactionRejected } from '../../event/wager-transaction-rejected.event';
 import type { WagerTransactionGateway } from '../../gateway/wager-transaction.gateway';
-import type {
-  LockedWallet,
-  WalletMovementGateway,
-  WalletMovementResult,
-} from '../../gateway/wallet-movement.gateway';
+import type { WalletMovementGateway } from '../../gateway/wallet-movement.gateway';
+import type { WagerTransactionSettlement } from '../wager-transaction-settlement';
 import type {
   SubmitWagerTransactionUseCaseInputDto,
   SubmitWagerTransactionUseCaseInterface,
@@ -32,7 +25,7 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
     private readonly wallets: WalletMovementGateway,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
-    private readonly outbox: OutboxGateway,
+    private readonly settlement: WagerTransactionSettlement,
   ) {}
 
   async execute(
@@ -41,7 +34,10 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
     try {
       return await this.attempt(input);
     } catch (error) {
-      if (error instanceof IdempotencyRaceError) {
+      if (
+        error instanceof IdempotencyRaceError ||
+        error instanceof ReferenceAlreadyReversedError
+      ) {
         return this.attempt(input);
       }
       throw error;
@@ -63,6 +59,8 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
       kind: input.kind,
       money: Money.from(input.money),
       at: this.clock.now(),
+      correlationId: input.correlationId,
+      referenceExternalTransactionId: input.referenceExternalTransactionId,
     });
 
     return this.transactions.execute(async (trx) => {
@@ -78,18 +76,8 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
       if (recorded) {
         return this.replay(recorded, candidate);
       }
-      const context: EventContext = {
-        eventId: this.ids.next(),
-        correlationId: input.correlationId,
-        occurredAt: this.clock.now(),
-      };
-      const movement = await this.settle(candidate, wallet, context);
+      await this.settlement.apply(candidate, wallet, trx);
       await this.wagers.create(candidate, trx);
-      const event = candidate.failureCode
-        ? WagerTransactionRejected.from(candidate, context)
-        : WagerTransactionProcessed.from(candidate, context);
-      await this.outbox.create(OutboxMessage.enqueue(event), trx);
-      await movement?.recordBalanceChanged();
       return toOutput(candidate, false);
     });
   }
@@ -102,36 +90,6 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
       throw new IdempotencyPayloadConflictError();
     }
     return toOutput(recorded, true);
-  }
-
-  private async settle(
-    candidate: WagerTransaction,
-    wallet: LockedWallet,
-    context: EventContext,
-  ): Promise<WalletMovementResult | null> {
-    const at = context.occurredAt;
-    const rejection = candidate.rejectionFor(wallet);
-    if (rejection) {
-      candidate.reject(rejection, wallet.balance, at);
-      return null;
-    }
-    const movement = candidate.affectsBalance()
-      ? await wallet.apply({
-          eventContext: {
-            eventId: this.ids.next(),
-            correlationId: context.correlationId,
-            causationId: context.eventId,
-            occurredAt: at,
-          },
-          transactionId: candidate.id,
-          entryId: this.ids.next(),
-          direction: candidate.ledgerDirectionFor(),
-          money: candidate.money,
-          at,
-        })
-      : null;
-    candidate.markProcessed(movement?.balance ?? wallet.balance, at);
-    return movement;
   }
 }
 

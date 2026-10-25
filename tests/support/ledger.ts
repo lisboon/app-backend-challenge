@@ -19,7 +19,7 @@ export async function debitWallet(
     );
     const id = Bun.randomUUIDv7();
     await em.execute(
-      "insert into wager_transactions (id,provider_id,external_transaction_id,idempotency_key,payload_hash,wallet_id,player_id,currency,round_id,game_id,kind,amount,status,result_balance,result_currency,created_at,processed_at) values (?,'provider-test',?,?,?, ?,?,?, 'round-test','game-test','BET',?,'PROCESSED',?::numeric - ?::numeric,?,now(),now())",
+      "insert into wager_transactions (id,provider_id,external_transaction_id,idempotency_key,payload_hash,wallet_id,player_id,currency,round_id,game_id,kind,amount,status,result_balance,result_currency,created_at,processed_at,correlation_id) values (?,'provider-test',?,?,?, ?,?,?, 'round-test','game-test','BET',?,'PROCESSED',?::numeric - ?::numeric,?,now(),now(),?)",
       [
         id,
         id,
@@ -32,6 +32,7 @@ export async function debitWallet(
         wallet.balance,
         amount,
         wallet.currency,
+        id,
       ],
     );
     await em.execute(

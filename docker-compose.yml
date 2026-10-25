@@ -61,6 +61,7 @@ services:
       SQS_ENDPOINT: http://sqs:4566
       WAGER_QUEUE_NAME: wager-transactions.fifo
       EVENTS_QUEUE_NAME: ${EVENTS_QUEUE_NAME:-wallet-events.fifo}
+      PENDING_REFERENCE_TTL_SECONDS: ${PENDING_REFERENCE_TTL_SECONDS:-3600}
     ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
     depends_on:
       migrate:
@@ -81,7 +82,9 @@ services:
       SQS_ENDPOINT: http://sqs:4566
       WAGER_QUEUE_NAME: wager-transactions.fifo
       EVENTS_QUEUE_NAME: ${EVENTS_QUEUE_NAME:-wallet-events.fifo}
+      PENDING_REFERENCE_TTL_SECONDS: ${PENDING_REFERENCE_TTL_SECONDS:-3600}
       OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-500}
+      PENDING_REFERENCE_POLL_INTERVAL_MS: ${PENDING_REFERENCE_POLL_INTERVAL_MS:-1000}
       WORKER_METRICS_PORT: "3001"
     ports: ["127.0.0.1:${WORKER_METRICS_PORT:-3001}:3001"]
     healthcheck:

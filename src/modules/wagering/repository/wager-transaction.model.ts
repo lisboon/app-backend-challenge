@@ -24,5 +24,8 @@ export const WagerTransactionModel = defineEntity({
     resultCurrency: p.string().length(3).nullable(),
     createdAt: p.datetime(),
     processedAt: p.datetime().nullable(),
+    correlationId: p.string(),
+    referenceAttempts: p.integer(),
+    nextReferenceAttemptAt: p.datetime().nullable(),
   },
 });

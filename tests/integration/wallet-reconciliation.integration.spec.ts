@@ -207,6 +207,9 @@ describe('reconciliação com infraestrutura real', () => {
       'outbox_publish_failures_total',
       'outbox_publish_retries_total',
       'outbox_published_total',
+      'pending_reference_resolved_total',
+      'pending_reference_retries_total',
+      'pending_reference_transactions',
       'wallet_reconciliation_divergences_total',
     ]);
     const other = await startApp();

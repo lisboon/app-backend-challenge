@@ -3,8 +3,8 @@
 Solução do desafio técnico da Jungle Gaming. O enunciado está em
 [`CHALLENGE.md`](CHALLENGE.md) e as decisões em [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-> Em construção. Este README lista só o que já existe. REFUND, ROLLBACK e o
-> consumidor SQS com inbox entram nos próximos incrementos.
+> Em construção. Submissão HTTP, reversões, referências pendentes e publicação
+> da outbox estão disponíveis. Consumo SQS de entrada e inbox vêm no próximo incremento.
 
 ## Pré-requisitos
 
@@ -22,7 +22,7 @@ O `--wait` só retorna quando PostgreSQL, SQS, API e worker estão saudáveis.
 Antes dos processos subirem, `migrate` aplica as migrations e termina. O
 LocalStack cria `wager-transactions.fifo`, `wager-transactions-dlq.fifo` e
 `wallet-events.fifo`. O worker publica os eventos confirmados da outbox na
-fila de eventos. Nenhum passo é manual.
+fila de eventos e reprocessa referências pendentes em um ciclo independente. Nenhum passo é manual.
 
 | Serviço | Endereço local |
 |---|---|
@@ -41,10 +41,10 @@ As portas mudam com `API_PORT`, `WORKER_METRICS_PORT`, `POSTGRES_PORT` e `SQS_PO
 | `GET /wallets/:walletId` | `200`, `404` ou `400` se o id não é UUID |
 | `GET /wallets/:walletId/ledger?cursor=...&limit=50` | `200` com `items` e `nextCursor`; limite de 1 a 100; `400` para query inválida e `404` para wallet inexistente |
 | `POST /wallets/:walletId/reconciliation` | Sem corpo; `200` com saldos armazenado/calculado, diferença, consistência e quantidade de entradas; `400` para id inválido e `404` para wallet inexistente |
-| `POST /wagering/transactions` | Header `Idempotency-Key` obrigatório; `201` aplicada, `422` rejeitada com `failureCode`; reenvio repete o resultado com `idempotentReplay: true`; `409` para chave ou `externalTransactionId` com outro payload; `404` para wallet inexistente; `503` se o lock não sai em 2 s |
+| `POST /wagering/transactions` | Header `Idempotency-Key` obrigatório; `201` aplicada, `202` aguardando referência, `422` rejeitada com `failureCode`; reenvio consulta o estado atual com `idempotentReplay: true`; `409` para chave ou `externalTransactionId` com outro payload; `404` para wallet inexistente; `503` se o lock não sai em 2 s |
 | `GET /wagering/transactions/:transactionId` | `200` com a transação e o saldo observado, `404` ou `400` |
 | `GET /providers/:providerId/wagering/transactions/:externalTransactionId` | `200` ou `404` |
-| `GET /metrics` | Texto Prometheus com métricas de reconciliação e famílias da outbox; colete a publicação no processo worker |
+| `GET /metrics` | Texto Prometheus com reconciliação, outbox e referências pendentes; colete os ciclos no processo worker |
 | `GET /health/live` | `200` enquanto o processo está de pé |
 | `GET /health/ready` | `200` com PostgreSQL e ambas as filas SQS alcançáveis; `503` dizendo qual dependência caiu |
 
@@ -67,6 +67,63 @@ curl -X POST http://127.0.0.1:3000/wallets \
   -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
 ```
 
+## Apostas, reversões e referência fora de ordem
+
+O submit aceita `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`. Valores monetários
+são strings com duas casas, dentro de `money: { amount, currency }`.
+`referenceExternalTransactionId` identifica a transação original no mesmo
+provider e aceita 1 a 128 caracteres: obrigatório em REFUND/ROLLBACK, opcional
+em WIN e proibido em BET/LOSS. `providerId: "internal"` é reservado. Violações
+dessas regras respondem 400, sem gravar transação.
+
+REFUND referencia BET. ROLLBACK referencia BET, WIN ou REFUND e inverte seu
+movimento. Reversões exigem valor igual; a referência deve estar processada e
+ter o mesmo player, wallet, moeda e rodada. WIN com referência só aceita BET,
+sem exigir o mesmo valor. Cada referência aceita uma reversão de cada tipo;
+BET já reembolsado não pode receber ROLLBACK enquanto o REFUND não for desfeito.
+
+Exemplo com uma wallet já aberta: substitua walletId e playerId pelos valores
+retornados por `POST /wallets`. Aplique o BET de 25, reembolse e depois desfaça
+o próprio reembolso com ROLLBACK (saldo inicial 100: 75 → 100 → 75):
+
+```bash
+curl -X POST http://127.0.0.1:3000/wagering/transactions \
+  -H 'content-type: application/json' -H 'Idempotency-Key: bet-1' \
+  -d '{"providerId":"provider-a","externalTransactionId":"bet-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+
+curl -X POST http://127.0.0.1:3000/wagering/transactions \
+  -H 'content-type: application/json' -H 'Idempotency-Key: refund-1' \
+  -d '{"providerId":"provider-a","externalTransactionId":"refund-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"REFUND","referenceExternalTransactionId":"bet-1","money":{"amount":"25.00","currency":"BRL"}}'
+
+curl -X POST http://127.0.0.1:3000/wagering/transactions \
+  -H 'content-type: application/json' -H 'Idempotency-Key: rollback-refund-1' \
+  -d '{"providerId":"provider-a","externalTransactionId":"rollback-refund-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"ROLLBACK","referenceExternalTransactionId":"refund-1","money":{"amount":"25.00","currency":"BRL"}}'
+```
+
+Se REFUND chegar antes de BET, a resposta será `202`:
+
+```json
+{
+  "transactionId": "<id>",
+  "status": "PENDING_REFERENCE",
+  "failureCode": null,
+  "balance": null,
+  "idempotentReplay": false
+}
+```
+
+O worker resolve depois da chegada da referência. Reenviar o mesmo corpo e a
+mesma chave retorna `idempotentReplay: true` com o estado atual: 202 enquanto
+pendente; 201 quando aplicado; 422 se rejeitado. Depois da resolução, o saldo
+retornado é o do desfecho persistido, mesmo que a wallet tenha novas operações.
+Os GET por id e por provedor/id externo mostram `referenceExternalTransactionId`
+e `referenceTransactionId`; o interno só é preenchido após aplicação.
+
+Referência ausente por uma hora vira REJECTED com `REFERENCE_NOT_FOUND` e
+evento de rejeição. Referência ainda pendente ou erro de processamento não gera
+essa rejeição. Eventos da resolução preservam o correlationId do primeiro
+submit; retries não criam eventos. Regras, precedência, transições e proteções
+SQL estão na [seção 10 da arquitetura](ARCHITECTURE.md#10-reversões-e-referências-pendentes).
 ## Rodar a API fora do container
 
 ```bash
@@ -80,7 +137,7 @@ bun run dev
 `migrate:down` reverte a última migration e `migrate:status` lista as aplicadas
 e as pendentes.
 
-Em outro terminal, com o mesmo `.env`, inicie o publicador:
+Em outro terminal, com o mesmo `.env`, inicie o worker de publicação e referências:
 
 ```bash
 bun run start:worker
@@ -91,6 +148,8 @@ curl http://127.0.0.1:3001/metrics
 |---|---|
 | `EVENTS_QUEUE_NAME` | Obrigatória; `.env.example` usa `wallet-events.fifo`. Deve ser um nome FIFO; configura também o hook do LocalStack |
 | `OUTBOX_POLL_INTERVAL_MS` | `500`; inteiro de 1 a 2147483647, intervalo entre ciclos do publicador |
+| `PENDING_REFERENCE_TTL_SECONDS` | `3600`; prazo desde createdAt para rejeitar uma referência ainda inexistente; mesmo valor na API e no worker |
+| `PENDING_REFERENCE_POLL_INTERVAL_MS` | `1000`; intervalo entre ciclos de resolução no worker |
 | `WORKER_METRICS_PORT` | `3001`; porta das métricas, independente da API |
 
 O worker tem `outbox_lag_seconds`, `outbox_published_total`,
@@ -99,7 +158,16 @@ têm label `event_type`. Publica prefixos de eventos por wallet, em ordem de
 sequence, com até dez wallets em paralelo. Uma falha interrompe apenas aquela
 wallet, sem tentar seus eventos seguintes. Eventos
 com falha recebem backoff exponencial de 1 s até 5 min e continuam pendentes,
-sem limite de tentativas. SIGTERM conclui o lote em andamento antes de sair.
+sem limite de tentativas. SIGTERM para ambos os schedulers e conclui os lotes em andamento antes de sair.
+
+O ciclo de referências processa até 100 candidatos por lote. Retries usam backoff
+de 1 s até 5 min, antecipado quando a referência chega na mesma wallet. A
+expiração só rejeita referências inexistentes; referências existentes ou falhas
+de processamento continuam pendentes além do TTL. As métricas são
+`pending_reference_transactions`, `pending_reference_resolved_total` (outcome
+`processed`, `rejected`, `expired`) e `pending_reference_retries_total`. A gauge
+observa o total no banco; evite somá-la entre workers. As duas variáveis novas
+aceitam inteiros de 1 a 2147483647.
 
 Para inspecionar eventos publicados no ambiente local:
 
