@@ -10,7 +10,7 @@ import {
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 
-import { eventually } from '../support/async';
+import { deferred, eventually } from '../support/async';
 import {
   ledgerMatchesBalance,
   migrateFresh,
@@ -72,7 +72,7 @@ describe('processos consumidores com PostgreSQL e LocalStack reais', () => {
     await queues.close();
   });
 
-  const startWorker = (sqsEndpoint?: string): AppProcess => {
+  const startWorker = (overrides: Record<string, string> = {}): AppProcess => {
     const env = testAppEnv(freePort());
     const worker = spawnWorker({
       ...env,
@@ -80,7 +80,7 @@ describe('processos consumidores com PostgreSQL e LocalStack reais', () => {
       WAGER_QUEUE_NAME: queues.sourceName,
       WAGER_DLQ_NAME: queues.deadLetterName,
       CONSUMER_RETRY_BASE_SECONDS: '1',
-      ...(sqsEndpoint ? { SQS_ENDPOINT: sqsEndpoint } : {}),
+      ...overrides,
     });
     workers.push(worker);
     return worker;
@@ -167,7 +167,7 @@ describe('processos consumidores com PostgreSQL e LocalStack reais', () => {
     const body = message(wallet, '10.00');
     await sendWagerMessage(sqs, queues.sourceUrl, body, wallet.walletId);
     const gate = gateSqs('DeleteMessage');
-    const first = startWorker(gate.endpoint);
+    const first = startWorker({ SQS_ENDPOINT: gate.endpoint });
     try {
       await eventually(async () => gate.entered(), 30_000);
       expect(await balanceOf(wallet.walletId)).toBe('90.00');
@@ -197,4 +197,102 @@ describe('processos consumidores com PostgreSQL e LocalStack reais', () => {
     ).toBe(1);
     expect(await receiveDeadLetters(sqs, queues.deadLetterUrl)).toEqual([]);
   }, 60_000);
+
+  it.skipIf(process.platform === 'win32')(
+    'SIGTERM termina a mensagem em voo, confirma, não recebe outra e sai com zero',
+    async () => {
+      const wallet = await open('100.00');
+      const inFlight = message(wallet, '10.00');
+      const next = message(wallet, '20.00');
+      await orm.em.fork().execute(`
+        create function consumer_test_gate() returns trigger language plpgsql as $$
+        begin
+          if new.external_transaction_id = '${inFlight.data.externalTransactionId}' then
+            perform pg_advisory_xact_lock(9051, 1);
+          end if;
+          return new;
+        end $$`);
+      await orm.em
+        .fork()
+        .execute(
+          'create trigger consumer_test_gate before insert on wager_transactions for each row execute function consumer_test_gate()',
+        );
+      const held = deferred();
+      const release = deferred();
+      const holder = orm.em.fork().transactional(async (em) => {
+        await em.execute('select pg_advisory_xact_lock(9051, 1)');
+        held.resolve();
+        await release.promise;
+      });
+      try {
+        await held.promise;
+        await sendWagerMessage(
+          sqs,
+          queues.sourceUrl,
+          inFlight,
+          wallet.walletId,
+        );
+        const worker = startWorker({ CONSUMER_CONCURRENCY: '1' });
+        const stdout = new Response(worker.stdout).text();
+        await eventually(
+          async () =>
+            (await count(
+              "select count(*) as n from pg_stat_activity where wait_event_type = 'Lock' and wait_event = 'advisory'",
+              [],
+            )) > 0,
+          15_000,
+        );
+        await sendWagerMessage(sqs, queues.sourceUrl, next, wallet.walletId);
+        worker.kill('SIGTERM');
+        expect(worker.exitCode).toBeNull();
+        release.resolve();
+        await holder;
+
+        expect(await worker.exited).toBe(0);
+        expect(await stdout).toContain('wager_message_worker_stopped');
+        expect(await balanceOf(wallet.walletId)).toBe('90.00');
+        expect(await approximateMessages(sqs, queues.sourceUrl)).toBe(1);
+      } finally {
+        release.resolve();
+        await holder;
+        await orm.em
+          .fork()
+          .execute('drop trigger consumer_test_gate on wager_transactions');
+        await orm.em.fork().execute('drop function consumer_test_gate()');
+      }
+
+      startWorker();
+      await eventually(
+        async () => (await approximateMessages(sqs, queues.sourceUrl)) === 0,
+        30_000,
+      );
+      expect(await balanceOf(wallet.walletId)).toBe('70.00');
+      const state = await ledgerMatchesBalance(orm, wallet.walletId);
+      expect(state.stored).toBe(state.rebuilt);
+    },
+    60_000,
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'SIGTERM durante a espera do long polling aborta o receive e sai sem esperar a fila',
+    async () => {
+      const gate = gateSqs('ReceiveMessage');
+      try {
+        const worker = startWorker({
+          SQS_ENDPOINT: gate.endpoint,
+          CONSUMER_CONCURRENCY: '1',
+        });
+        void new Response(worker.stdout).text();
+        await eventually(async () => gate.entered(), 15_000);
+        const startedAt = performance.now();
+        worker.kill('SIGTERM');
+
+        expect(await worker.exited).toBe(0);
+        expect(performance.now() - startedAt).toBeLessThan(1500);
+      } finally {
+        await gate.close();
+      }
+    },
+    30_000,
+  );
 });
