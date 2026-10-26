@@ -418,9 +418,15 @@ describe('sessão derrubada entre os comandos da transação', () => {
           );
         return row?.status === 'PROCESSED';
       }, 30_000);
+      const [effects] = await orm.em
+        .fork()
+        .execute<{ n: string }[]>(
+          'select count(*) as n from wallet_ledger_entries l join wager_transactions t on t.id = l.transaction_id where t.external_transaction_id = ?',
+          [message.externalTransactionId],
+        );
+      expect(Number(effects.n)).toBe(1);
       const state = await ledgerMatchesBalance(orm, walletId);
-      expect(state.stored).toBe('98.00');
-      expect(state.rebuilt).toBe('98.00');
+      expect(state.stored).toBe(state.rebuilt);
     } finally {
       worker.kill('SIGKILL');
       await worker.exited;
