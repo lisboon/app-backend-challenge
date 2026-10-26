@@ -55,12 +55,13 @@ PR não é aprovado.
 | Adaptador de outra tecnologia (SQS, métrica) | `src/infra/<tecnologia>/<nome>.ts` | classe que implementa a porta | `infra/observability/reconciliation-monitor.ts` |
 | Caso de uso | `src/modules/<ctx>/usecase/<ação>/<ação>.usecase.ts` e `.usecase.dto.ts`. A pasta é **só a ação** (`create`, `find-by-id`, `submit`, `reconcile`, `resolve-pending`), com qualificador apenas quando a ação sozinha for ambígua dentro do módulo (`list-ledger`). O módulo já está no caminho; não o repita | a classe **inclui o agregado**, porque é nome global: `<Ação><Agregado>UseCase` (`FindWalletByIdUseCase`), com DTOs e interface no mesmo prefixo | `wallet/usecase/find-by-id/` |
 | Saída compartilhada entre casos de uso | `src/modules/<ctx>/usecase/<nome>.output.dto.ts` | interface + função `to<Nome>Output` | `wallet/usecase/wallet.output.dto.ts` |
-| Colaborador usado por mais de um caso de uso | `src/modules/<ctx>/usecase/<nome>.ts` | uma classe com um propósito, sem framework | (criada no passo 2) |
+| Colaborador usado por mais de um caso de uso | `src/modules/<ctx>/usecase/<nome>.ts` | uma classe com um propósito, sem framework; função pura quando não guarda dependência nem estado | `wagering/usecase/wager-transaction-settlement.ts`, `wagering/usecase/wager-transaction-candidate.ts` |
 | Contrato de entrada usado por mais de um canal (HTTP e fila) | `src/infra/contract/<nome>.contract.ts` | schemas zod estritos | `infra/contract/wager-transaction.contract.ts` |
 | Documento além de README e ARCHITECTURE | `docs/<nome>.md` | — | (criado no passo 4) |
 | Montagem do contexto | `src/modules/<ctx>/factory/<ctx>.factory.ts` | `const <Ctx>Factory = { create(...) }` | `wallet/factory/wallet.factory.ts` |
 | Rota HTTP | `src/infra/http/<ctx>/<ctx>.controller.ts`, `.module.ts`, `.request.ts` | controller sem regra, só `parseRequest` e caso de uso | `infra/http/wallet/` |
 | Ciclo de worker | `src/infra/worker/<nome>-worker.ts` | `@Injectable` com `OnModuleInit`/`OnModuleDestroy` | `infra/worker/outbox-worker.ts` |
+| Decisão pura de um worker | `src/infra/worker/<nome>.ts` | função pura sem framework nem I/O, testada em unidade | `infra/worker/message-disposition.ts` |
 | Migration | `src/infra/database/migrations/Migration<AAAAMMDD><NNNNNN><Nome>.ts`, listada em `index.ts` | `up` e `down` | `Migration20261024000002WagerSubmit.ts` |
 | Verificação automatizada | `scripts/<nome>.ts`; configuração ESM em `scripts/package.json` | script executável em Bun | `scripts/check-imports.ts` |
 | Teste | `tests/unit/<ctx>/<arquivo>.spec.ts`, `tests/integration/<área>.integration.spec.ts`, `tests/e2e/<área>.e2e.spec.ts`; apoio em `tests/support/` | — | `tests/unit/wallet/wallet.entity.spec.ts` |
