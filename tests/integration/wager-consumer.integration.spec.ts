@@ -336,6 +336,54 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
     expect(await receiveDeadLetters(sqs, queues.deadLetterUrl)).toEqual([]);
   }, 40_000);
 
+  it('conexão do banco derrubada no meio do processamento é transitória, não FAILED', async () => {
+    const wallet = await open();
+    const body = message(wallet);
+    await orm.em.fork().execute(`
+      create sequence consumer_test_drop_seq;
+      create function consumer_test_drop() returns trigger language plpgsql as $$
+      begin
+        if new.external_transaction_id = '${body.data.externalTransactionId}'
+          and nextval('consumer_test_drop_seq') = 1 then
+          perform pg_terminate_backend(pg_backend_pid());
+        end if;
+        return new;
+      end $$;
+      create trigger consumer_test_drop before insert on wager_transactions
+        for each row execute function consumer_test_drop()`);
+    try {
+      await send(body, wallet.walletId);
+      startConsumer();
+
+      await eventually(
+        async () => (await balanceOf(wallet.walletId)) === '90.00',
+        30_000,
+      );
+      expect(
+        await count(
+          "select count(*) as n from wager_transactions where external_transaction_id = ? and status = 'PROCESSED'",
+          [body.data.externalTransactionId],
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          "select count(*) as n from wager_transactions where status = 'FAILED' and wallet_id = ?",
+          [wallet.walletId],
+        ),
+      ).toBe(0);
+      expect(
+        await count('select last_value as n from consumer_test_drop_seq', []),
+      ).toBeGreaterThanOrEqual(2);
+      expect(await receiveDeadLetters(sqs, queues.deadLetterUrl)).toEqual([]);
+      await invariant(wallet.walletId);
+    } finally {
+      await orm.em.fork().execute(`
+        drop trigger consumer_test_drop on wager_transactions;
+        drop function consumer_test_drop();
+        drop sequence consumer_test_drop_seq`);
+    }
+  }, 40_000);
+
   it('falha transitória persistente chega à DLQ pelo redrive depois de 5 recebimentos', async () => {
     const wallet = await open();
     const release = await holdWallet(wallet.walletId);
