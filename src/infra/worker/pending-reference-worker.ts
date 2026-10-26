@@ -15,6 +15,8 @@ export const RESOLVE_PENDING_WAGER_TRANSACTIONS = Symbol(
   'RESOLVE_PENDING_WAGER_TRANSACTIONS',
 );
 
+const BATCH_SIZE = 100;
+
 @Injectable()
 export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PendingReferenceWorker.name);
@@ -43,8 +45,10 @@ export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async run(): Promise<void> {
+    let full = false;
     try {
-      const result = await this.resolver.execute({ limit: 100 });
+      const result = await this.resolver.execute({ limit: BATCH_SIZE });
+      full = result.attempted >= BATCH_SIZE;
       if (result.attempted > 0) {
         this.logger.log({
           event: 'pending_reference_batch_completed',
@@ -58,9 +62,12 @@ export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
       });
     }
     if (!this.stopping) {
-      this.timer = setTimeout(() => {
-        this.current = this.run();
-      }, this.config.pendingReferencePollIntervalMs);
+      this.timer = setTimeout(
+        () => {
+          this.current = this.run();
+        },
+        full ? 0 : this.config.pendingReferencePollIntervalMs,
+      );
     }
   }
 }

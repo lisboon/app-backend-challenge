@@ -777,7 +777,12 @@ O backoff é `1s × 2^(attempts-1)`, sem jitter, com teto de cinco minutos.
 **Não há limite de tentativas nem descarte para DLQ:** um evento confirmado
 nunca é abandonado. O atraso deve ser acompanhado pelo lag e resolvido pela
 operação. O intervalo entre ciclos vem de `OUTBOX_POLL_INTERVAL_MS`, padrão
-500 ms, inteiro positivo dentro da faixa suportada pelo timer do runtime.
+500 ms, inteiro positivo dentro da faixa suportada pelo timer do runtime. Um
+lote cheio (100 eventos tentados) busca o próximo na hora, sem esperar o
+intervalo: antes, o publicador ficava limitado a 100 eventos por intervalo, e
+sob carga o lag crescia sem limite. Não vira laço quente: um evento que falha
+ganha backoff e deixa de ser devido. O resolver de pendências segue a mesma
+regra.
 
 O envio ocorre depois do commit financeiro, mas antes do commit do lote da
 outbox. Se o processo morrer, o PostgreSQL aborta o lote e libera os locks.
