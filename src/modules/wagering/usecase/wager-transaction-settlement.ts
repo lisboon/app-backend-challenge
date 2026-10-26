@@ -46,6 +46,15 @@ export class WagerTransactionSettlement {
     await this.process(transaction, wallet, reference, at, trx);
   }
 
+  scheduleRetry(transaction: WagerTransaction, at: Date): void {
+    transaction.scheduleReferenceRetry(
+      at,
+      transaction.referenceExpired(at, this.ttlSeconds)
+        ? undefined
+        : this.ttlSeconds,
+    );
+  }
+
   private async referenceOf(
     transaction: WagerTransaction,
     trx: TransactionContext,

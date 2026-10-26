@@ -3,6 +3,7 @@ import { Counter, Gauge, Registry } from 'prom-client';
 
 import type { OutboxMessage } from '../../modules/@shared/domain/outbox/outbox-message.entity';
 import type { OutboxMonitor } from '../../modules/@shared/gateway/outbox-monitor.gateway';
+import { errorNameOf } from './error-name';
 
 export class PrometheusOutboxMonitor implements OutboxMonitor {
   private readonly logger = new Logger(PrometheusOutboxMonitor.name);
@@ -61,6 +62,13 @@ export class PrometheusOutboxMonitor implements OutboxMonitor {
 
   lag(seconds: number): void {
     this.lagGauge.set(seconds);
+  }
+
+  lagUnavailable(error: unknown): void {
+    this.logger.warn({
+      event: 'outbox_lag_unavailable',
+      errorCode: errorNameOf(error),
+    });
   }
 }
 

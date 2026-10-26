@@ -961,7 +961,10 @@ Não representa um SLA medido dos provedores; deve ser ajustado à integração.
 `1s × 2^(attempts-1)` com teto de cinco minutos. A pendência nasce com contador zero e primeira consulta agendada em um segundo;
 cada retry incrementa o contador antes de calcular o backoff. Para referência
 ausente, o agendamento é limitado ao
-próprio deadline, para o backoff não adiar a expiração. Somente se a referência
+próprio deadline, para o backoff não adiar a expiração. O retry depois de uma
+falha transitória do resolver segue o mesmo teto enquanto o prazo está no
+futuro; depois dele, usa só o backoff, para não agendar no passado e repetir a
+cada ciclo. Somente se a referência
 continuar inexistente ao vencer o prazo ocorre `REFERENCE_NOT_FOUND` e evento
 rejeitado. Referência existente, ainda pendente, continua esperando além do TTL;
 referência existente processada continua podendo ser aplicada após esse prazo.
@@ -1151,6 +1154,11 @@ OpenTelemetry e dashboard são opcionais no enunciado e não foram feitos.
 | `wager_message_processing_seconds{outcome}` | histograma | worker | latência do consumo |
 | `outbox_published_total`, `outbox_publish_failures_total`, `pending_reference_transactions`, `pending_reference_resolved_total`, `wallet_reconciliation_divergences_total` | vários | ver seções 7, 9 e 10 | |
 
+- **Leitura de gauge não desfaz o ciclo.** O lag da outbox e a contagem de
+  pendências são lidos depois do commit do lote. Se a leitura falha, o lote
+  continua contado e o worker loga `outbox_lag_unavailable` ou
+  `pending_reference_count_unavailable`; o valor anterior fica até o próximo
+  ciclo. Antes, a falha dessa leitura aparecia como falha do ciclo inteiro.
 - **Mensagens contam depois que o SQS confirma.** O desfecho de uma mensagem
   (processada, duplicata, retry ou DLQ) só entra nas métricas quando o
   `DeleteMessage`, o `ChangeMessageVisibility` ou o envio à DLQ dá certo. Se o

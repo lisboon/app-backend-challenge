@@ -24,6 +24,7 @@ const monitor: OutboxMonitor = {
   publicationFailed: () => undefined,
   retryScheduled: () => undefined,
   lag: () => undefined,
+  lagUnavailable: () => undefined,
 };
 
 function message(
@@ -83,4 +84,25 @@ describe('PublishOutboxUseCase', () => {
       expect(updated).toBe(0);
     },
   );
+
+  it('lote commitado continua contado quando a leitura do lag falha depois', async () => {
+    const unavailable: unknown[] = [];
+    const lost = new Error('banco caiu depois do commit');
+    const useCase = new PublishOutboxUseCase(
+      transactions,
+      {
+        findDue: async () => [message(undefined, at)],
+        update: async () => undefined,
+        oldestPending: async () => {
+          throw lost;
+        },
+      },
+      { publish: async () => undefined },
+      { now: () => at },
+      { ...monitor, lagUnavailable: (error) => unavailable.push(error) },
+    );
+
+    expect(await useCase.execute({ limit: 10 })).toEqual({ attempted: 1 });
+    expect(unavailable).toEqual([lost]);
+  });
 });

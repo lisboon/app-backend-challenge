@@ -46,6 +46,7 @@ const silentMonitor: PendingReferenceMonitor = {
   resolved: () => undefined,
   retryScheduled: () => undefined,
   failed: () => undefined,
+  pendingUnavailable: () => undefined,
 };
 
 interface Wallet {
