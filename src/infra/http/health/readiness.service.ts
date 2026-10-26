@@ -5,7 +5,7 @@ import { MikroORM } from '@mikro-orm/postgresql';
 import type { AppConfig } from '../../config/app-config';
 import { APP_CONFIG } from '../../config/config.module';
 
-export type DependencyStatus = 'up' | 'down';
+type DependencyStatus = 'up' | 'down';
 
 export interface ReadinessReport {
   status: DependencyStatus;

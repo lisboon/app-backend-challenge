@@ -3,6 +3,25 @@
 Registro das escolhas, do porquê e do que foi descartado. Cada seção nasce no
 incremento que tomou a decisão.
 
+1. [Camadas por módulo](#1-camadas-por-módulo)
+2. [Money](#2-money)
+3. [Taxonomia de falha e status HTTP](#3-taxonomia-de-falha-e-status-http)
+4. [Infraestrutura local](#4-infraestrutura-local): LocalStack, PostgreSQL,
+   imagem, por que MikroORM, Bun, servidor HTTP e readiness
+5. [Wallet, ledger e invariantes no schema](#5-wallet-ledger-e-invariantes-no-schema)
+6. [Transações e erros de banco](#6-transações-e-erros-de-banco): estratégia de
+   concorrência, pool e queda de conexão
+7. [Extrato e reconciliação](#7-extrato-e-reconciliação)
+8. [Submissão de transações de aposta](#8-submissão-de-transações-de-aposta)
+9. [Outbox](#9-outbox)
+10. [Reversões e referências pendentes](#10-reversões-e-referências-pendentes)
+11. [Consumo SQS, inbox e FAILED](#11-consumo-sqs-inbox-e-failed)
+12. [Observabilidade](#12-observabilidade)
+13. [Autenticação](#13-autenticação)
+14. [Trade-offs e limitações](#14-trade-offs-e-limitações)
+
+O teste de carga está em [`docs/load-test.md`](docs/load-test.md).
+
 ## 1. Camadas por módulo
 
 Cada contexto de negócio fica em `src/modules/<contexto>/`:
@@ -1094,3 +1113,42 @@ a `AnonymousAuthenticator`, que autoriza tudo.
 O que muda para ligar: a implementação da `RequestAuthenticator`, a
 configuração do realm e o serviço do Keycloak no compose. Domínio, casos de
 uso e controllers não mudam.
+
+## 14. Trade-offs e limitações
+
+O que escolhemos pagar, e o que ficou de fora. Os detalhes estão na seção
+indicada.
+
+**Trade-offs assumidos**
+
+| Escolha | Custo | Seção |
+|---|---|---|
+| Lock pessimista por wallet | a hot wallet é serial: 61 a 76 op/s no teste de carga; acima da capacidade, 503 rápido com `Retry-After`, sem efeito | 6, `docs/load-test.md` |
+| Uma mensagem por `ReceiveMessage` | duas idas ao SQS por mensagem; a fila fez 104 a 129 mensagens/s contra 280 a 400 op/s da HTTP no mesmo ambiente | 11 |
+| Contrato estrito na fila | um campo novo do produtor vai para a DLQ até o contrato mudar | 11 |
+| `FAILED` terminal | reprocessar da DLQ não reaplica; o provedor reenvia com outra chave | 11 |
+| Outbox at-least-once, sem limite de tentativas | sob carga o lag chegou a 21 s e zerou depois; o consumidor de eventos deduplica por `eventId` | 9 |
+| Camadas, portas e factories | mais arquivos por operação; em troca, fronteiras impostas pelo lint e casos de uso testáveis sem infraestrutura | 1 |
+
+**Limitações conhecidas**
+
+- **Sem Identity Provider.** O ponto de extensão existe e é testado; o desenho
+  com Keycloak está descrito (seção 13).
+- **Uma falha a mais por queda de conexão.** O cliente do `pg` cujo backend foi
+  encerrado volta ao pool e falha uma vez, como transitório, antes de ser
+  descartado (seção 6).
+- **Override do kysely 0.29.7** até o MikroORM depender dessa versão (seção 6).
+- **Conexões:** processos × `DATABASE_POOL_MAX` precisa caber no
+  `max_connections`; acima disso, o caminho é um PgBouncer, que não está no
+  compose (seção 6).
+- **Reverter migrations com dados.** A `Migration20261024000004OutboxOrdering`
+  só com a outbox drenada (issue #10, aberta), e a
+  `Migration20261025000005WagerReversals` substitui as correlações originais
+  pelo id da transação (seções 9 e 10).
+- **Métricas por processo.** Contadores reiniciam com o processo, e as gauges
+  de pendências e de DLQ observam o total, não devem ser somadas entre
+  instâncias (seções 10 e 12). `OPENING` fica fora de `wager_transactions_total`.
+- **Teste de carga numa máquina só**, com SQS emulado: os números comparam
+  cenários, não medem capacidade de produção (`docs/load-test.md`).
+- **Windows.** Os testes de `SIGTERM` só rodam em Linux, e fora de container o
+  processo sai com 143 (seção 4).

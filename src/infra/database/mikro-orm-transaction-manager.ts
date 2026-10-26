@@ -20,7 +20,7 @@ export interface LockConflictMonitor {
 
 const UNOBSERVED: LockConflictMonitor = { conflict: () => undefined };
 
-export class MikroOrmTransactionContext extends TransactionContext {
+class MikroOrmTransactionContext extends TransactionContext {
   constructor(readonly em: EntityManager) {
     super();
   }

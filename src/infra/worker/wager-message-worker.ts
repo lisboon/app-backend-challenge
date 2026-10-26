@@ -38,7 +38,7 @@ export const RECORD_FAILURE_FOR_DELIVERY = Symbol(
 
 export const WAGER_CONSUMER_MONITOR = Symbol('WAGER_CONSUMER_MONITOR');
 
-export const WAGER_CONSUMER_NAME = 'wager-transactions';
+const WAGER_CONSUMER_NAME = 'wager-transactions';
 
 const IDLE_AFTER_FAILURE_MS = 1000;
 

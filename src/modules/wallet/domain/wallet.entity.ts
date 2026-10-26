@@ -5,7 +5,7 @@ import {
   WalletLedgerEntry,
 } from './wallet-ledger-entry.entity';
 
-export interface WalletState {
+interface WalletState {
   id: string;
   playerId: string;
   balance: Money;
@@ -14,7 +14,7 @@ export interface WalletState {
   updatedAt: Date;
 }
 
-export interface OpenWalletProps {
+interface OpenWalletProps {
   id: string;
   playerId: string;
   initialBalance: Money;
@@ -23,7 +23,7 @@ export interface OpenWalletProps {
   at: Date;
 }
 
-export interface WalletMovementProps {
+interface WalletMovementProps {
   entryId: string;
   transactionId: string;
   money: Money;

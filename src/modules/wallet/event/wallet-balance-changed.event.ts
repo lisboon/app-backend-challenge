@@ -10,7 +10,7 @@ import type {
 } from '../domain/wallet-ledger-entry.entity';
 import type { Wallet } from '../domain/wallet.entity';
 
-export interface WalletBalanceChangedData {
+interface WalletBalanceChangedData {
   walletId: string;
   transactionId: string;
   direction: LedgerDirection;

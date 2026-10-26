@@ -4,7 +4,7 @@ import { Money } from '../../@shared/domain/money';
 import { Wallet } from '../domain/wallet.entity';
 import type { WalletModel } from './wallet.model';
 
-export type WalletRow = InferEntity<typeof WalletModel>;
+type WalletRow = InferEntity<typeof WalletModel>;
 
 export const WalletModelMapper = {
   toModel(wallet: Wallet): WalletRow {
