@@ -3,7 +3,8 @@
 Registro das escolhas, do porquê e do que foi descartado. Cada seção nasce no
 incremento que tomou a decisão.
 
-1. [Camadas por módulo](#1-camadas-por-módulo)
+1. [Camadas por módulo](#1-camadas-por-módulo) e a
+   [rota de leitura do submit](#rota-de-leitura-o-submit-de-ponta-a-ponta)
 2. [Money](#2-money)
 3. [Taxonomia de falha e status HTTP](#3-taxonomia-de-falha-e-status-http)
 4. [Infraestrutura local](#4-infraestrutura-local): LocalStack, PostgreSQL,
@@ -65,6 +66,59 @@ dos projetos anteriores. Dentro do agregado ficam os verbos do domínio pedidos
 no enunciado: `Wallet.open`, `WalletLedgerEntry.create` e `rehydrate`. O
 `LedgerGateway` permite criar e consultar lançamentos; a ausência de `update`
 e `delete` expressa no contrato que o ledger não muda.
+
+### Rota de leitura: o submit de ponta a ponta
+
+`POST /wagering/transactions` atravessa todas as camadas e é o melhor ponto de
+partida para ler o código. As regras de cada passo estão nas seções 8 a 10.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as WageringController
+    participant U as SubmitWagerTransactionUseCase
+    participant T as MikroOrmTransactionManager
+    participant W as WalletMovementRepository
+    participant R as WagerTransactionRepository
+    participant S as WagerTransactionSettlement
+    participant O as OutboxMessageRepository
+    C->>U: execute(contrato validado, Idempotency-Key)
+    U->>T: execute(trabalho): READ COMMITTED, lock_timeout 2 s
+    U->>W: lock(walletId): SELECT ... FOR UPDATE
+    U->>R: findByIdempotencyKey(provider, chave)
+    alt chave já gravada
+        R-->>U: transação gravada: replay, ou 409 se o hash difere
+    else chave nova
+        U->>S: apply(candidata, wallet travada)
+        S->>R: findByExternalId(referência) e findReversals
+        S->>W: wallet.apply: debit ou credit, update por versão, lançamento
+        S->>O: evento da transação
+        W->>O: WalletBalanceChanged, quando há movimento
+        U->>R: create(candidata): 23505 vira IdempotencyRaceError e nova tentativa
+    end
+    T-->>U: COMMIT, ou 503 se a falha é transitória
+    U-->>C: desfecho: o status define 201, 202, 422 ou 500
+    Note over O: depois do commit, o OutboxWorker publica no SQS
+```
+
+| Ordem | Arquivo | O que olhar |
+|---|---|---|
+| 1 | `src/infra/http/wagering/wagering.controller.ts` | header obrigatório, `parseRequest` e o status pelo desfecho |
+| 2 | `src/infra/contract/wager-transaction.contract.ts` | o contrato Zod compartilhado entre HTTP e fila |
+| 3 | `src/modules/wagering/factory/wagering.factory.ts` | como o caso de uso recebe as dependências concretas |
+| 4 | `src/modules/wagering/usecase/submit/submit.usecase.ts` | lock, idempotência e a nova tentativa |
+| 5 | `src/infra/database/mikro-orm-transaction-manager.ts` | isolamento, `lock_timeout` e a tradução para 503 |
+| 6 | `src/modules/wagering/usecase/wager-transaction-settlement.ts` | rejeitar, aguardar referência ou processar |
+| 7 | `src/modules/wagering/domain/wager-transaction.entity.ts` | `rejectionFor`, `awaitsReference` e `ledgerDirectionFor` |
+| 8 | `src/modules/wallet/repository/wallet-movement.repository.ts` | a porta que o contexto de apostas usa para mover a wallet |
+| 9 | `src/modules/wallet/domain/wallet.entity.ts` | `debit` e `credit` com as invariantes de saldo |
+| 10 | `src/modules/wagering/repository/wager-transaction.repository.ts` | o `23505` do índice único virando `IdempotencyRaceError` |
+| 11 | `src/infra/http/shared/errors/http-error.filter.ts` | o mapa de falha para status e o `Retry-After` |
+| 12 | `src/infra/worker/outbox-worker.ts` | a publicação do que ficou na outbox |
+
+O consumo da fila entra no mesmo caso de uso pelo
+`src/infra/worker/wager-message-worker.ts`, com a inbox na mesma transação
+(seção 11).
 
 ## 2. Money
 
