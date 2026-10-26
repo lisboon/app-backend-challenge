@@ -208,6 +208,27 @@ obrigaria extensão `.js` em todo import relativo. O custo é não poder usar
   container, o kernel ignora esse reenvio. O teste de processo confere que os
   hooks rodaram, não o código de saída.
 
+### Servidor HTTP
+
+- **Logs JSON.** API e worker usam `ConsoleLogger({ json: true })`; cada linha
+  do stdout é um objeto JSON.
+- **Keep-alive de 65 s, `headersTimeout` de 66 s.** O padrão do Node, 5 s,
+  fechava sockets ociosos no meio da suíte (99 vezes por execução do spec de
+  apostas), e um `POST` que o cliente mandava num socket recém-fechado falhava
+  com `ECONNRESET`, cerca de uma vez a cada dez execuções. Com 65 s, os
+  fechamentos caíram a zero e o spec passou 20 vezes seguidas. A causa exata do
+  entrelaçamento não foi reproduzida em probe sintético; a correção remove a
+  condição necessária para ele. O valor é o recomendado atrás de balanceador: o
+  ALB fecha conexão ociosa em 60 s, e a aplicação precisa manter o keep-alive
+  por mais tempo, senão o balanceador devolve 502 pela mesma corrida. A
+  configuração é o provider `HttpKeepAlive` no `AppModule`, então a API e os
+  testes usam a mesma.
+- **Medição antes do body parser.** O middleware de observabilidade entra por
+  `configureHttpApplication`, chamada pelo `main.ts` e pelo `startApp` dos
+  testes. Registrado como middleware de rota do Nest, ele não via o JSON
+  malformado: o Nest registra os parsers no `init()`, e o corpo inválido é
+  recusado antes da rota. `app.use` antes do `init()` roda primeiro.
+
 ### Readiness
 
 `/health/ready` faz `select 1` no PostgreSQL e `GetQueueUrl` nas filas de
@@ -307,6 +328,49 @@ aparece nos dois casos:
 | `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `57P01`–`57P03`, timeout de conexão do pool, `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
 | qualquer outro | 500, porque é defeito, não condição de negócio |
 
+**Conflitos de lock são contados antes da tradução.** O `55P03` (lock não
+obtido), o `40P01` (deadlock) e o `40001` (serialização) incrementam
+`lock_conflicts_total{reason}` na própria `MikroOrmTransactionManager`, o único
+ponto que ainda vê o código do driver. A resposta não muda: 503 na HTTP, retry
+na fila. A serialização não ocorre hoje, porque as escritas usam
+`READ COMMITTED` e o `snapshot` só lê; ela fica classificada para não sumir das
+métricas se isso mudar. Timeout e deadlock reais têm teste.
+
+**Pool dimensionado pela concorrência.** `DATABASE_POOL_MAX` (padrão 15, de 2 a
+200) chega ao `pg.Pool`. Sem ele valia o padrão do driver, 10, e com dez
+leitores da fila ocupados a outbox e o resolver recebiam
+`timeout exceeded when trying to connect` em 1 s, porque o
+`connectionTimeoutMillis` também limita a fila de espera do pool. A
+configuração recusa `CONSUMER_CONCURRENCY + 3 > DATABASE_POOL_MAX`: cada leitor
+segura no máximo uma conexão, e outbox, resolver e readiness rodam em sequência,
+uma conexão cada. O padrão 15 é o que o worker precisa (10 + 3) mais folga de
+2. Medimos o pico na suíte inteira: 42 conexões com pool 10, 82 com pool 20 e
+62 com pool 15, contra `max_connections` 100. Para escalar, a conta é
+**processos × `DATABASE_POOL_MAX` ≤ `max_connections`**; com muitos processos, o
+caminho é um PgBouncer em modo transação, compatível com o `set local
+lock_timeout`, que vale só dentro da transação.
+
+**Queda de conexão dentro da transação.** O kysely 0.29.6, usado pelo
+MikroORM 7.2.5, chamava `release()` da conexão só depois do `rollback`. Com a
+conexão morta, o `rollback` lançava e a vaga do pool nunca voltava: depois de
+tantas quedas quanto o tamanho do pool, toda rota da API e todo ciclo do worker
+falhavam para sempre, e o `close` travava. O `package.json` força o kysely
+0.29.7 por `overrides`, que é a correção do próprio projeto (`release()` num
+`finally`, com o comentário "a failed rollback can't be meaningfully retried").
+O MikroORM estável mais recente ainda fixa a 0.29.6. O diff entre as duas
+versões foi lido inteiro antes da troca: só libera conexões e escapa JSON no
+helper de MSSQL, sem rede, filesystem nem `eval`. O override sai quando o
+MikroORM depender da 0.29.7.
+
+`tests/integration/connection-fault.integration.spec.ts` derruba o backend por
+`pg_terminate_backend` com a operação bloqueada dentro da transação, em toda
+rota da API e nos ciclos do worker, com pool pequeno. Com o kysely antigo, os
+oito testes falham e o encerramento trava; com o atual, a falha responde 503 ou vira retry, sem efeito
+parcial, e a operação seguinte funciona. Resta um custo conhecido: o `pg` não
+marca como morto o cliente cujo backend foi encerrado, e ele volta ao pool. O
+próximo uso dele falha uma vez, também como transitório, e só então é
+descartado. É uma falha a mais por queda, sem efeito em dado.
+
 **Concorrência na abertura.** Vinte `POST /wallets` simultâneos para o mesmo
 player e moeda resultam em um 201 e dezenove 409. O índice único serializa as
 inserções, e a tradução do `23505` faz o conflito chegar como resposta de
@@ -354,8 +418,7 @@ O módulo global de observabilidade fornece um `Registry` próprio do
 `wallet_reconciliation_divergences_total`; não há registro global padrão nem
 métricas automáticas. `GET /metrics` usa o content type desse registro.
 O contador é local ao processo e reinicia com ele; o Prometheus agrega as
-instâncias. As métricas da outbox estão na seção 9. As demais métricas da seção
-12 acompanham os próximos incrementos de consumo e inbox. As referências pendentes estão na seção 10.
+instâncias. O catálogo completo de métricas e logs está na seção 12.
 
 ## 8. Submissão de transações de aposta
 
@@ -394,7 +457,14 @@ reenvia com a mesma chave.
 | aplicada | `201` | `{ transactionId, status: "PROCESSED", failureCode: null, balance, idempotentReplay }` |
 | rejeitada por regra de negócio | `422` | o mesmo corpo com `status: "REJECTED"` e o `failureCode` |
 | referência pendente | `202` | `{ transactionId, status: "PENDING_REFERENCE", failureCode: null, balance: null, idempotentReplay }` |
+| falha interna gravada (seção 11) | `500` | o mesmo corpo com `status: "FAILED"`, `failureCode: "PROCESSING_FAILED"` e `balance: null` |
 | reenvio | o do estado atual | o desfecho persistido com `idempotentReplay: true` |
+
+O `FAILED` só nasce no consumo da fila e no resolver (seção 11). Na HTTP, uma
+falha interna responde 500 sem gravar nada, e o provedor pode reenviar com a
+mesma chave. Se a chave já tiver um `FAILED` gravado, o reenvio pela HTTP
+responde 500 com o corpo da transação: o 500 se distingue do 503 transitório
+porque reenviar não muda o desfecho.
 
 **`payloadHash`.** `v1:` seguido do SHA-256 em hexadecimal do JSON canônico
 de `{ providerId, externalTransactionId, walletId, playerId, roundId, gameId,
@@ -429,10 +499,8 @@ saldo atual, porque responde ao pedido original.
   255, com espaços nas pontas removidos. As colunas são `text`; o limite
   protege índices e logs, e quem passa dele recebe `400`.
 
-**Limitações:** consumo pela fila de entrada, inbox e recuperação para `FAILED`
-em falhas persistentes entram no próximo incremento. Uma referência existente
-que não pode ser aplicada continua pendente, mesmo após o TTL; o operador deve
-acompanhar retries e resolver a causa.
+O consumo da fila `wager-transactions.fifo` usa este mesmo caso de uso, com
+a inbox na mesma transação (seção 11).
 
 ## 9. Outbox
 
@@ -539,7 +607,8 @@ outbox. Se o processo morrer, o PostgreSQL aborta o lote e libera os locks.
 Outra instância assume os pendentes. Se o SQS recebeu e o commit falhou, haverá
 novo envio do mesmo eventId. Essa entrega é **at-least-once**: o FIFO deduplica
 por cinco minutos, mas isso não substitui a deduplicação persistente por
-eventId no consumidor, que será implementado com a inbox.
+eventId, que é responsabilidade de quem consome `wallet-events.fifo`. A inbox
+da seção 11 faz o mesmo papel para a fila de entrada deste serviço.
 
 O worker usa o Registry próprio já existente. Expõe `outbox_lag_seconds`
 (idade do pendente mais antigo, inclusive em retry, zero quando vazio),
@@ -559,7 +628,8 @@ recebido ou URL de conexão. `providerId` é null no evento de saldo, cujo
 contrato não contém esse campo.
 
 Em SIGTERM, um handler fecha o contexto Nest, espera o lote em andamento e
-encerra com zero. O scheduler para antes de destruir o cliente SQS e o pool
+encerra com zero. Se o encerramento falhar, registra `worker_shutdown_failed`
+e sai com 1, em vez de ficar vivo até o `SIGKILL` do orquestrador. O scheduler para antes de destruir o cliente SQS e o pool
 do banco. O tratamento explícito evita o reenvio do sinal pelo Nest, que fora
 de container produziria 143; SIGINT usa `enableShutdownHooks`. O Compose
 reserva dois minutos para encerramento. Uma interrupção forçada mantém a
@@ -583,8 +653,11 @@ não pode referenciar a si mesma (`REFERENCE_SELF`, 400, e
 `wager_tx_reference_not_self_ck` no schema): ela ficaria esperando por ela
 própria. Player, wallet, moeda e rodada precisam coincidir. A busca já garante
 o mesmo provedor e o id externo; o trigger SQL confere de novo os dois.
-Referência `REJECTED` é recusada;
-referência inexistente ou ainda `PENDING_REFERENCE` deixa a operação pendente.
+Referência terminal não processada (`REJECTED` ou `FAILED`) é recusada com
+`REFERENCE_NOT_PROCESSED`; referência inexistente ou ainda `PENDING_REFERENCE`
+deixa a operação pendente. Antes da seção 11, só `REJECTED` era recusada, e uma
+reversão de um `FAILED` ficaria pendente para sempre, porque o TTL só expira
+referência ausente.
 Somente `PROCESSED` pode ser aplicada. `OPENING` nunca serve como referência.
 
 A referência externa é obrigatória em `REFUND`/`ROLLBACK` e opcional em `WIN`.
@@ -652,18 +725,20 @@ A tabela é fechada; qualquer outra transição é erro de programação
 
 | Estado atual | Próximos estados |
 |---|---|
-| `PENDING` | `PROCESSED`, `REJECTED`, `PENDING_REFERENCE` |
-| `PENDING_REFERENCE` | `PROCESSED`, `REJECTED` |
+| `PENDING` | `PROCESSED`, `REJECTED`, `PENDING_REFERENCE`, `FAILED` |
+| `PENDING_REFERENCE` | `PROCESSED`, `REJECTED`, `FAILED` |
 | `PROCESSED` | nenhum |
 | `REJECTED` | nenhum |
+| `FAILED` | nenhum |
 
 Retries atualizam somente metadados de uma pendente, sem transição de estado.
 O trigger SQL permite essa atualização, mas recusa mudança de identidade,
 DELETE de qualquer transação e todo UPDATE terminal, inclusive sem alteração.
 A identidade é tudo exceto status, falha, saldo observado, referência interna,
 tentativas, próxima tentativa e processed_at. TRUNCATE tem proteção de statement.
-A wallet preserva id, player e moeda. `FAILED` permanece fora do domínio deste
-incremento; linhas legadas nesse estado também são protegidas como terminais.
+A wallet preserva id, player e moeda. A `Migration20261025000007FailedTransitions`
+libera no trigger as transições para `FAILED`, espelhando a tabela do domínio;
+o `down` volta a recusá-las, e o round-trip é testado.
 
 `WagerTransaction.rejectionFor` concentra as regras. `WagerTransactionSettlement`
 é o colaborador de submit e `ResolvePendingWagerTransactionsUseCase`: resolve
@@ -722,12 +797,15 @@ por provedor e id externo, somente na mesma wallet e no mesmo commit SQL.
 Pendentes de outra wallet não são tocadas; recebem REFERENCE_MISMATCH no seu
 ciclo normal. Índices parciais de vencimento e referência sustentam as buscas.
 
-Uma falha inesperada aborta movimento, desfecho e outbox. O resolver agenda retry
-numa transação nova, repetindo wallet antes da linha, status e vencimento.
-Falha de infraestrutura ou aplicação nunca é convertida em referência ausente.
-Se o reagendamento também falhar, registra a falha e deixa a pendente para um
-ciclo posterior. Esse caminho não impõe TTL: uma referência existente com defeito
-continua pendente até recuperação; FAILED é responsabilidade do próximo passo.
+Uma falha aborta movimento, desfecho e outbox. Numa transação nova, repetindo
+wallet antes da linha, status e vencimento, o resolver decide pela natureza:
+falha transitória agenda retry; falha interna (erro sem natureza de domínio ou
+de natureza `INTERNAL`) grava `FAILED` com `PROCESSING_FAILED`, terminal e
+auditável. Antes, o erro interno repetia sem limite, mesmo depois do TTL; o
+§6.3 define `FAILED` como "erro permanente de infraestrutura" e o §10 não deixa
+erro permanente em retry. Falha nunca é convertida em referência ausente. Se a
+segunda transação também falhar, registra a falha e deixa a pendente para um
+ciclo posterior.
 
 O mesmo processo worker executa dois ciclos com intervalos próprios. O novo
 `PendingReferenceWorker` usa `PENDING_REFERENCE_POLL_INTERVAL_MS`, padrão 1000,
@@ -737,8 +815,171 @@ estado persistido. Os testes com dois processos, reinício e SIGTERM rodam em
 Linux; no Windows, SIGTERM não oferece a mesma semântica de sinal.
 
 O Registry existente expõe `pending_reference_transactions` (gauge),
-`pending_reference_resolved_total` (counter com outcome processed/rejected/expired)
+`pending_reference_resolved_total` (counter com outcome processed/rejected/expired/failed)
 e `pending_reference_retries_total`. Logs levam identificadores e
 código ou classe da falha, sem payload financeiro. Contadores são locais ao
 processo; a gauge é uma observação do total no banco, e não deve ser somada entre
 workers como se cada processo possuísse pendentes diferentes.
+
+## 11. Consumo SQS, inbox e FAILED
+
+### Contrato e caso de uso
+
+A mensagem segue o §10: `messageId`, `type` igual a `WagerTransactionRequested`,
+`occurredAt` ISO-8601 com fuso e `data` com o mesmo contrato do submit HTTP, mais
+`idempotencyKey`. O contrato mora em `src/infra/contract/` e é o mesmo schema
+zod nos dois canais. É estrito: JSON inválido, tipo desconhecido ou campo a mais
+vão para a DLQ com `MESSAGE_INVALID`. O custo é a compatibilidade futura: um
+produtor que acrescente um campo terá as mensagens recusadas até o contrato
+mudar. Preferimos isso a aceitar em silêncio um campo que talvez mudasse o
+significado da transação, como a HTTP já faz com 400.
+
+O worker chama o mesmo `SubmitWagerTransactionUseCase` da HTTP. A diferença é o
+`TransactionManager`: `submitFor(delivery)` entrega o caso de uso com um
+`InboxTransactionManager`, que envolve a transação do efeito. O `correlationId`
+é o `messageId`. `OPENING` pela fila vai para a DLQ com
+`TRANSACTION_KIND_NOT_SUBMITTABLE`, como na HTTP.
+
+### Inbox na mesma transação do efeito
+
+`inbox_messages` tem chave primária `(consumer_name, message_id)`, com
+`consumer_name` igual a `wager-transactions`, e grava o `payloadHash` de
+`{ type, data }`; `messageId` e `occurredAt` são transporte e ficam fora.
+Dentro da transação do efeito, o `InboxTransactionManager`:
+
+1. insere a mensagem com `on conflict do nothing`;
+2. se a chave já existe e o hash bate, lança `DuplicateMessageError`, e o worker
+   confirma a entrega sem novo efeito;
+3. se o hash difere, lança `MessageIdPayloadConflictError`, que vai para a DLQ
+   com `MESSAGE_ID_PAYLOAD_CONFLICT`;
+4. roda o caso de uso e marca `processed_at`.
+
+Inbox, transação, wallet, ledger e outbox confirmam ou desfazem juntos. Duas
+entregas simultâneas da mesma mensagem se serializam no índice único: a segunda
+espera o commit da primeira e cai no passo 2. Triggers recusam `DELETE`,
+`TRUNCATE`, mudança de identidade e qualquer alteração depois de `processed_at`.
+A mesma `idempotencyKey` em mensagens diferentes não é duplicata da inbox: passa
+e vira replay no caso de uso, como na HTTP.
+
+### Desfecho de cada mensagem
+
+O `ack` (`DeleteMessage`) só acontece depois que o `execute` retorna, ou seja,
+depois do commit. Um teste mata o worker com `SIGKILL` entre o commit e o
+`DeleteMessage`; a reentrega cai na inbox e o débito continua único.
+
+| Resultado | Ação | Por quê |
+|---|---|---|
+| `PROCESSED`, `REJECTED` ou `PENDING_REFERENCE` | ack | desfecho gravado; a rejeição de negócio é terminal (§10) |
+| duplicata da inbox ou replay da chave | ack | o efeito já existe |
+| erro `TRANSIENT` | `ChangeMessageVisibility` com backoff | `CONSUMER_RETRY_BASE_SECONDS` (padrão 2) × 2^(recebimentos − 1), teto de 300 s |
+| erro de contrato, conflito, recurso inexistente ou negócio lançado | DLQ com o `failureCode` | reenviar igual não muda nada |
+| erro interno | grava `FAILED` e manda para a DLQ com `PROCESSING_FAILED` | permanente, auditável (§6.3) |
+
+O limite de tentativas é a `RedrivePolicy` da fila, `maxReceiveCount` 5, com
+visibilidade de 30 s, criada pelo hook do LocalStack e conferida no teste de
+contrato SQS. Um transitório persistente chega à DLQ pelo redrive do SQS, sem o
+atributo `failureCode`. A DLQ explícita reaproveita o `MessageGroupId` e usa o
+`MessageId` do SQS como `MessageDeduplicationId`: uma mensagem com JSON
+inválido não tem `messageId` de negócio, e o id do SQS é estável entre
+reentregas. Se o `DeleteMessage` falhar depois do envio à DLQ, a reentrega
+manda de novo com o mesmo id e o FIFO deduplica.
+
+### FAILED
+
+`FAILED` nasce em dois caminhos. No consumo, depois de um erro interno, a
+transação do efeito já foi desfeita inteira; o `RecordFailedWagerTransactionUseCase`
+grava, numa transação nova e com a mesma inbox, a transação `FAILED` com
+`PROCESSING_FAILED`, sem saldo observado, sem lançamento e sem evento. Se essa
+gravação também falhar, a mensagem volta para retry em vez de ir à DLQ sem
+auditoria. No resolver, o erro interno encerra a pendência como `FAILED`
+(seção 10).
+
+`FAILED` não gera evento de integração: a lista mínima do §11 não o inclui. A
+transação fica auditável pela linha, pelo atributo da DLQ, pelo log
+`wager_transaction_recorded` e por `wager_transactions_total{status="FAILED"}`.
+
+É terminal. Reprocessar a mensagem da DLQ depois de corrigir a causa não muda
+nada: a inbox já marcou a entrega, e a mesma chave responde com o `FAILED`
+gravado, tanto pela fila quanto pela HTTP (500). Para tentar de novo, o
+provedor usa outra chave. Se, numa corrida, a chave já tiver um desfecho
+gravado por outra entrega, o `FAILED` não é gravado e a mensagem vai para a
+DLQ do mesmo jeito; preferimos uma DLQ visível a confirmar uma entrega que
+falhou.
+
+### Ordem, concorrência e encerramento
+
+O worker roda `CONSUMER_CONCURRENCY` leitores (padrão 10, de 1 a 100), cada um
+com `ReceiveMessage` de **uma** mensagem e espera de 4 s. Medimos no LocalStack
+que, com a cabeça de um grupo e a seguinte no mesmo lote, a seguinte é entregue
+enquanto a cabeça ainda está em voo, quebrando a ordem do grupo; e as seguintes
+acumulam `ApproximateReceiveCount` sem serem processadas, o que levaria o
+redrive a mandar para a DLQ uma mensagem nunca tentada. Recebida sozinha, a
+cabeça bloqueia o grupo, mesmo com a visibilidade estendida. O teste de ordem
+segura o lock por 7 s, força várias reentregas e mantém 10 antes de 20. O custo
+é uma chamada `ReceiveMessage` por mensagem. A ordem da fila é otimização: a
+garantia continua sendo o lock da wallet no banco (§8).
+
+A espera é de 4 s, e não 20, porque o `SQSClient` compartilhado com a outbox tem
+`requestTimeout` de 5 s.
+
+Em `SIGTERM`, o worker sinaliza a parada e aborta o `ReceiveMessage` em curso
+(`AbortSignal`), termina e confirma a mensagem em voo e não recebe outra. O pool
+do banco fecha depois, no `onApplicationShutdown`. Um receive abortado depois
+de o SQS ter separado a mensagem a devolve no fim da visibilidade, e a inbox
+cobre a reentrega. Os testes de processo cobrem a mensagem em voo, o long
+polling abortado em menos de 1,5 s (cerca de 20 ms medidos, contra 1,5 s sem o
+abort), três workers com entregas duplicadas e o worker morto antes do ack.
+
+## 12. Observabilidade
+
+Métricas Prometheus com `prom-client`, num `Registry` próprio por processo:
+`GET /metrics` na API e a porta `WORKER_METRICS_PORT` (padrão 3001) no worker.
+Contadores reiniciam com o processo; o Prometheus soma as instâncias.
+OpenTelemetry e dashboard são opcionais no enunciado e não foram feitos.
+
+| Métrica | Tipo | Onde | Cobre (§12) |
+|---|---|---|---|
+| `wager_transactions_total{status, kind}` | counter | API e worker | transações por status |
+| `idempotent_replays_total{status}` | counter | API e worker | duplicatas por chave |
+| `inbox_duplicates_total` | counter | worker | duplicatas por entrega |
+| `wager_message_retries_total` | counter | worker | retries do consumo |
+| `outbox_publish_retries_total{event_type}`, `pending_reference_retries_total` | counter | worker | retries da outbox e das pendências |
+| `wager_messages_dead_lettered_total{failure_code}` | counter | worker | envios explícitos à DLQ |
+| `wager_dlq_messages` | gauge | worker | mensagens na DLQ, inclusive as do redrive |
+| `lock_conflicts_total{reason}` | counter | API e worker | conflitos de lock |
+| `outbox_lag_seconds` | gauge | worker | outbox lag |
+| `http_request_duration_seconds{method, route, status}` | histograma | API | latência HTTP |
+| `wager_message_processing_seconds{outcome}` | histograma | worker | latência do consumo |
+| `outbox_published_total`, `outbox_publish_failures_total`, `pending_reference_transactions`, `pending_reference_resolved_total`, `wallet_reconciliation_divergences_total` | vários | ver seções 7, 9 e 10 | |
+
+- **Transações contam depois do commit.** O submit, o registro de `FAILED` e o
+  resolver avisam o `WagerTransactionMonitor` só depois que a transação
+  confirma; uma tentativa desfeita (a corrida perdida pela chave, por exemplo)
+  não aparece. A abertura de wallet (`OPENING`) não passa pelo submit e fica
+  fora de `wager_transactions_total`, que mede as transações do provedor.
+- **A profundidade da DLQ é lida na coleta.** O redrive nativo move mensagens
+  sem o worker ver, então um contador do worker subestimaria a DLQ. O gauge
+  consulta o SQS no scrape; se o SQS falhar, mantém o último valor, registra
+  `wager_dlq_depth_unavailable` e o restante de `/metrics` continua respondendo.
+  O scrape fica limitado pelo `requestTimeout` de 5 s do cliente.
+- **A rota da métrica é o padrão**, como `/wallets/:walletId`, nunca o caminho
+  com ids, para limitar a cardinalidade; requisição sem rota é `unmatched`.
+- **Onde ficam as portas de monitor.** As que o domínio usa ficam em
+  `modules/<ctx>/gateway/` (`WagerTransactionMonitor`, `PendingReferenceMonitor`).
+  As que só a infraestrutura usa são declaradas por quem consome:
+  `WagerConsumerMonitor` no worker e `LockConflictMonitor` na
+  `TransactionManager`. O adaptador Prometheus em `infra/observability/` depende
+  delas, e não o contrário, como nas portas do domínio.
+
+Logs JSON, sem corpo de requisição, valor monetário, saldo ou URL de conexão:
+
+| Evento | Campos |
+|---|---|
+| `http_request` | `method`, `route`, `status`, `durationMs`, `correlationId`; não registrado para `/health` e `/metrics` |
+| `wager_transaction_recorded`, `wager_transaction_replayed` | `correlationId`, `transactionId`, `walletId`, `providerId`, `kind`, `status`, `failureCode` |
+| `wager_message_handled` | `messageId`, `correlationId`, `transactionId`, `providerId`, `walletId`, `action`, `failureCode`, `receiveCount`, `durationMs` |
+| `outbox_published`, `pending_reference_resolved` e demais | identificadores disponíveis e o código ou a classe da falha |
+
+Os testes conferem, na API real em processo separado, que toda linha do stdout
+é JSON e que o valor enviado não aparece; e que o log de transação tem
+exatamente os campos acima.
