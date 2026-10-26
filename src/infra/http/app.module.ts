@@ -10,6 +10,7 @@ import { HealthModule } from './health/health.module';
 import { CorrelationInterceptor } from './shared/correlation.interceptor';
 import { HttpErrorFilter } from './shared/errors/http-error.filter';
 import { HttpKeepAlive } from './shared/http-keep-alive';
+import { RequestObservabilityMiddleware } from './shared/request-observability.middleware';
 import { WageringModule } from './wagering/wagering.module';
 import { WalletModule } from './wallet/wallet.module';
 
@@ -28,6 +29,7 @@ import { WalletModule } from './wallet/wallet.module';
     { provide: APP_FILTER, useClass: HttpErrorFilter },
     { provide: APP_INTERCEPTOR, useClass: CorrelationInterceptor },
     HttpKeepAlive,
+    RequestObservabilityMiddleware,
   ],
 })
 export class AppModule implements OnApplicationShutdown {

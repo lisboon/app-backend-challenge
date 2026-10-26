@@ -60,7 +60,7 @@ PR não é aprovado.
 | Documento além de README e ARCHITECTURE | `docs/<nome>.md` | — | (criado no passo 4) |
 | Montagem do contexto | `src/modules/<ctx>/factory/<ctx>.factory.ts` | `const <Ctx>Factory = { create(...) }` | `wallet/factory/wallet.factory.ts` |
 | Rota HTTP | `src/infra/http/<ctx>/<ctx>.controller.ts`, `.module.ts`, `.request.ts` | controller sem regra, só `parseRequest` e caso de uso | `infra/http/wallet/` |
-| Peça transversal da API | `src/infra/http/shared/<nome>.ts`, agrupada em subpasta quando forem várias do mesmo tema | interceptor, filtro, decorator ou provider de ciclo, registrado no `AppModule` | `infra/http/shared/correlation.interceptor.ts`, `infra/http/shared/http-keep-alive.ts` |
+| Peça transversal da API | `src/infra/http/shared/<nome>.ts`, agrupada em subpasta quando forem várias do mesmo tema | interceptor, filtro, decorator, middleware ou provider de ciclo, registrado no `AppModule`; o que precisa rodar antes do body parser entra em `configureHttpApplication`, chamada pelo `main.ts` e pelos testes | `infra/http/shared/correlation.interceptor.ts`, `infra/http/shared/configure-http-application.ts` |
 | Ciclo de worker | `src/infra/worker/<nome>-worker.ts` | `@Injectable` com `OnModuleInit`/`OnModuleDestroy` | `infra/worker/outbox-worker.ts` |
 | Decisão pura de um worker | `src/infra/worker/<nome>.ts` | função pura sem framework nem I/O, testada em unidade | `infra/worker/message-disposition.ts` |
 | Migration | `src/infra/database/migrations/Migration<AAAAMMDD><NNNNNN><Nome>.ts`, listada em `index.ts` | `up` e `down` | `Migration20261024000002WagerSubmit.ts` |

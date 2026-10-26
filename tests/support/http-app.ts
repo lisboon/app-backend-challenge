@@ -7,6 +7,7 @@ import {
 } from '../../src/infra/config/app-config';
 import { APP_CONFIG } from '../../src/infra/config/config.module';
 import { AppModule } from '../../src/infra/http/app.module';
+import { configureHttpApplication } from '../../src/infra/http/shared/configure-http-application';
 
 export const WAGER_QUEUE_NAME = 'wager-transactions.fifo';
 export const WAGER_DLQ_NAME = 'wager-transactions-dlq.fifo';
@@ -74,6 +75,7 @@ export async function startApp(
     .compile();
 
   const app = moduleRef.createNestApplication({ logger: false });
+  configureHttpApplication(app);
   await app.listen(0);
   return { app, baseUrl: await app.getUrl() };
 }
