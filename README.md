@@ -132,22 +132,24 @@ ter o mesmo player, wallet, moeda e rodada. WIN com referência só aceita BET,
 sem exigir o mesmo valor. Cada referência aceita uma reversão de cada tipo;
 BET já reembolsado não pode receber ROLLBACK enquanto o REFUND não for desfeito.
 
-Exemplo com uma wallet já aberta: substitua walletId e playerId pelos valores
-retornados por `POST /wallets`. Aplique o BET de 25, reembolse e depois desfaça
-o próprio reembolso com ROLLBACK (saldo inicial 100: 75 → 100 → 75):
+Exemplo na wallet da primeira aposta, que tem 975,00 depois do `bet-1`. Aplique
+um novo BET de 25, reembolse e depois desfaça o próprio reembolso com ROLLBACK
+(975 → 950 → 975 → 950). Cada transação tem seu próprio `externalTransactionId`
+e sua própria `Idempotency-Key`: repetir `bet-1` com outra chave responde 409
+`EXTERNAL_TRANSACTION_CONFLICT`.
 
 ```bash
 curl -X POST http://127.0.0.1:3000/wagering/transactions \
-  -H 'content-type: application/json' -H 'Idempotency-Key: bet-1' \
-  -d '{"providerId":"provider-a","externalTransactionId":"bet-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:bet-2' \
+  -d '{"providerId":"provider-a","externalTransactionId":"bet-2","walletId":"<walletId>","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","roundId":"round-2","gameId":"game-1","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
 
 curl -X POST http://127.0.0.1:3000/wagering/transactions \
-  -H 'content-type: application/json' -H 'Idempotency-Key: refund-1' \
-  -d '{"providerId":"provider-a","externalTransactionId":"refund-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"REFUND","referenceExternalTransactionId":"bet-1","money":{"amount":"25.00","currency":"BRL"}}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:refund-2' \
+  -d '{"providerId":"provider-a","externalTransactionId":"refund-2","walletId":"<walletId>","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","roundId":"round-2","gameId":"game-1","kind":"REFUND","referenceExternalTransactionId":"bet-2","money":{"amount":"25.00","currency":"BRL"}}'
 
 curl -X POST http://127.0.0.1:3000/wagering/transactions \
-  -H 'content-type: application/json' -H 'Idempotency-Key: rollback-refund-1' \
-  -d '{"providerId":"provider-a","externalTransactionId":"rollback-refund-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"ROLLBACK","referenceExternalTransactionId":"refund-1","money":{"amount":"25.00","currency":"BRL"}}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:rollback-refund-2' \
+  -d '{"providerId":"provider-a","externalTransactionId":"rollback-refund-2","walletId":"<walletId>","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","roundId":"round-2","gameId":"game-1","kind":"ROLLBACK","referenceExternalTransactionId":"refund-2","money":{"amount":"25.00","currency":"BRL"}}'
 ```
 
 Se REFUND chegar antes de BET, a resposta será `202`:
