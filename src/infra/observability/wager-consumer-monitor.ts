@@ -16,6 +16,8 @@ export class PrometheusWagerConsumerMonitor implements WagerConsumerMonitor {
 
   private readonly deadLettered: Counter<'failure_code'>;
 
+  private readonly settleFailures: Counter<'action'>;
+
   constructor(registry: Registry, queue: WagerQueue) {
     const logger = this.logger;
     this.duration = new Histogram({
@@ -39,6 +41,12 @@ export class PrometheusWagerConsumerMonitor implements WagerConsumerMonitor {
       name: 'wager_messages_dead_lettered_total',
       help: 'Mensagens enviadas à DLQ pelo consumidor, por código',
       labelNames: ['failure_code'],
+      registers: [registry],
+    });
+    this.settleFailures = new Counter({
+      name: 'wager_message_settle_failures_total',
+      help: 'Ack, retry ou envio à DLQ que o SQS não confirmou',
+      labelNames: ['action'],
       registers: [registry],
     });
     new Gauge({
@@ -69,6 +77,10 @@ export class PrometheusWagerConsumerMonitor implements WagerConsumerMonitor {
       case 'dead-letter':
         this.deadLettered.inc({ failure_code: disposition.failureCode });
     }
+  }
+
+  settleFailed(disposition: MessageDisposition): void {
+    this.settleFailures.inc({ action: disposition.action });
   }
 }
 

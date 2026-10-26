@@ -1052,7 +1052,8 @@ OpenTelemetry e dashboard são opcionais no enunciado e não foram feitos.
 | `inbox_duplicates_total` | counter | worker | duplicatas por entrega |
 | `wager_message_retries_total` | counter | worker | retries do consumo |
 | `outbox_publish_retries_total{event_type}`, `pending_reference_retries_total` | counter | worker | retries da outbox e das pendências |
-| `wager_messages_dead_lettered_total{failure_code}` | counter | worker | envios explícitos à DLQ |
+| `wager_messages_dead_lettered_total{failure_code}` | counter | worker | envios explícitos à DLQ confirmados pelo SQS |
+| `wager_message_settle_failures_total{action}` | counter | worker | ack, retry ou envio à DLQ que o SQS não confirmou; a mensagem volta no fim da visibilidade |
 | `wager_dlq_messages` | gauge | worker | mensagens na DLQ, inclusive as do redrive |
 | `lock_conflicts_total{reason}` | counter | API e worker | conflitos de lock |
 | `outbox_lag_seconds` | gauge | worker | outbox lag |
@@ -1060,6 +1061,12 @@ OpenTelemetry e dashboard são opcionais no enunciado e não foram feitos.
 | `wager_message_processing_seconds{outcome}` | histograma | worker | latência do consumo |
 | `outbox_published_total`, `outbox_publish_failures_total`, `pending_reference_transactions`, `pending_reference_resolved_total`, `wallet_reconciliation_divergences_total` | vários | ver seções 7, 9 e 10 | |
 
+- **Mensagens contam depois que o SQS confirma.** O desfecho de uma mensagem
+  (processada, duplicata, retry ou DLQ) só entra nas métricas quando o
+  `DeleteMessage`, o `ChangeMessageVisibility` ou o envio à DLQ dá certo. Se o
+  SQS falha, conta em `wager_message_settle_failures_total`. Antes, uma DLQ
+  inalcançável aparecia como mensagem enviada, até uma avaliação externa
+  mostrar o caso; o teste aponta a DLQ para uma fila que não existe.
 - **Transações contam depois do commit.** O submit, o registro de `FAILED` e o
   resolver avisam o `WagerTransactionMonitor` só depois que a transação
   confirma; uma tentativa desfeita (a corrida perdida pela chave, por exemplo)

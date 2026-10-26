@@ -64,6 +64,7 @@ export type RecordFailureForDelivery = (
 
 export interface WagerConsumerMonitor {
   handled(disposition: MessageDisposition, seconds: number): void;
+  settleFailed(disposition: MessageDisposition): void;
 }
 
 @Injectable()
@@ -135,9 +136,13 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
     const { disposition, transactionId } = parsed
       ? await this.submit(parsed)
       : INVALID_MESSAGE;
-    await this.settle(message, disposition);
+    const settled = await this.settle(message, disposition);
     const seconds = (performance.now() - startedAt) / 1000;
-    this.monitor.handled(disposition, seconds);
+    if (settled) {
+      this.monitor.handled(disposition, seconds);
+    } else {
+      this.monitor.settleFailed(disposition);
+    }
     this.logger.log({
       event: 'wager_message_handled',
       messageId: parsed?.messageId,
@@ -151,6 +156,7 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
           ? disposition.failureCode
           : undefined,
       receiveCount: message.receiveCount,
+      settled,
       durationMs: Math.round(seconds * 1000),
     });
   }
@@ -207,15 +213,17 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
   private async settle(
     message: ReceivedWagerMessage,
     disposition: MessageDisposition,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.apply(message, disposition);
+      return true;
     } catch (error) {
       this.logger.error({
         event: 'wager_message_settle_failed',
         sqsMessageId: message.sqsMessageId,
         errorCode: errorCodeOf(error),
       });
+      return false;
     }
   }
 

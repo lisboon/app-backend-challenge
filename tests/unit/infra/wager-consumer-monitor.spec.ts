@@ -39,6 +39,26 @@ describe('PrometheusWagerConsumerMonitor', () => {
     }
   });
 
+  it('ação que o SQS não confirmou conta como falha, não como desfecho', async () => {
+    const registry = new Registry();
+    const monitor = new PrometheusWagerConsumerMonitor(
+      registry,
+      queueWithDepth(async () => 0),
+    );
+
+    monitor.settleFailed({
+      action: 'dead-letter',
+      failureCode: FailureCode.MESSAGE_INVALID,
+    });
+
+    const metrics = await registry.metrics();
+    expect(metrics).toContain(
+      'wager_message_settle_failures_total{action="dead-letter"} 1',
+    );
+    expect(metrics).not.toContain('wager_messages_dead_lettered_total{');
+    expect(metrics).not.toContain('wager_message_processing_seconds_count{');
+  });
+
   it('SQS fora na coleta mantém o último valor da DLQ e não derruba as métricas', async () => {
     const registry = new Registry();
     let available = true;
