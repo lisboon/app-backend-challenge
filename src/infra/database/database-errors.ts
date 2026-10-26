@@ -56,3 +56,22 @@ export function isTransientFailure(error: unknown): boolean {
         )),
   );
 }
+
+export type LockConflictReason = 'lock_timeout' | 'deadlock' | 'serialization';
+
+const LOCK_CONFLICTS: Readonly<Record<string, LockConflictReason>> = {
+  '55P03': 'lock_timeout',
+  '40P01': 'deadlock',
+  '40001': 'serialization',
+};
+
+export function lockConflictReason(
+  error: unknown,
+): LockConflictReason | undefined {
+  for (const layer of layers(error)) {
+    if (typeof layer.code === 'string' && layer.code in LOCK_CONFLICTS) {
+      return LOCK_CONFLICTS[layer.code];
+    }
+  }
+  return undefined;
+}

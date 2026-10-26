@@ -523,8 +523,15 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       }
     });
 
-    it('lock retido além do limite responde 503 com Retry-After e não aplica', async () => {
+    it('lock retido além do limite responde 503 com Retry-After, não aplica e conta o conflito', async () => {
       const wallet = await open('100.00');
+      const timeouts = async (): Promise<number> =>
+        Number(
+          (await (await fetch(baseUrl + '/metrics')).text()).match(
+            /lock_conflicts_total\{reason="lock_timeout"\} (\d+)/,
+          )?.[1] ?? '0',
+        );
+      const before = await timeouts();
       const em = orm.em.fork();
       let release: () => void = () => undefined;
       const held = new Promise<void>((resolve) => {
@@ -553,6 +560,7 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
         failureCode: FailureCode.INFRASTRUCTURE_UNAVAILABLE,
       });
       expect(await balanceOf(wallet.walletId)).toBe('100.00');
+      expect(await timeouts()).toBe(before + 1);
     }, 10_000);
   });
 

@@ -1,9 +1,11 @@
 import { Global, Inject, Module, OnApplicationShutdown } from '@nestjs/common';
 import { MikroORM } from '@mikro-orm/postgresql';
+import { Registry } from 'prom-client';
 
 import type { TransactionManager } from '../../modules/@shared/domain/transaction/transaction-manager';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
+import { PrometheusLockConflictMonitor } from '../observability/lock-conflict-monitor';
 import { MikroOrmTransactionManager } from './mikro-orm-transaction-manager';
 import { ormConfig } from './orm.config';
 
@@ -20,9 +22,12 @@ export const TRANSACTION_MANAGER = Symbol('TRANSACTION_MANAGER');
     },
     {
       provide: TRANSACTION_MANAGER,
-      inject: [MikroORM],
-      useFactory: (orm: MikroORM): TransactionManager =>
-        new MikroOrmTransactionManager(orm),
+      inject: [MikroORM, Registry],
+      useFactory: (orm: MikroORM, registry: Registry): TransactionManager =>
+        new MikroOrmTransactionManager(
+          orm,
+          new PrometheusLockConflictMonitor(registry),
+        ),
     },
   ],
   exports: [MikroORM, TRANSACTION_MANAGER],

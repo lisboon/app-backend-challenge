@@ -208,6 +208,7 @@ describe('reconciliação com infraestrutura real', () => {
     expect(families).toEqual([
       'http_request_duration_seconds',
       'idempotent_replays_total',
+      'lock_conflicts_total',
       'outbox_lag_seconds',
       'outbox_publish_failures_total',
       'outbox_publish_retries_total',
