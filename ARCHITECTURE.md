@@ -500,10 +500,15 @@ somente leitura também impede uma correção acidental. O adaptador compartilha
 com `execute` a tradução de erros de conexão.
 
 O caso de uso carrega a wallet e passa sua moeda ao gateway do extrato, sem
-nova consulta à wallet no repositório. Créditos e débitos são somados
-separadamente no SQL em `NUMERIC`, convertidos para `numeric(20,2)::text` e
-reconstruídos como `Money`. O saldo calculado nasce de `créditos.subtract(débitos)`,
-sem conversão monetária para `number` nem manipulação de sinal em strings.
+nova consulta à wallet no repositório. O saldo líquido do ledger é somado numa
+única agregação `NUMERIC` sem limite (créditos menos débitos) e só o resultado
+é convertido para `numeric(20,2)`; o SQL devolve o módulo e o sinal, e o
+domínio aplica `negate()`, sem conversão monetária para `number` nem
+manipulação de sinal em strings. Somar créditos e débitos em separado não
+serve: o giro acumulado passa da faixa mesmo com o saldo válido. Uma wallet no
+saldo máximo, com um BET e um WIN de 1,00, levava a reconciliação a 500 até
+uma avaliação externa reproduzir o caso; há teste para ele e para o ledger
+adulterado com soma negativa.
 O relatório calcula armazenado menos calculado, incluindo diferenças negativas.
 Wallet zero sem entradas soma zero.
 

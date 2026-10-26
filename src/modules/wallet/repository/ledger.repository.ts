@@ -33,17 +33,19 @@ export class LedgerRepository implements LedgerGateway {
     trx: TransactionContext,
   ): Promise<{ balance: Money; entries: number }> {
     const [row] = await entityManagerOf(trx).execute<
-      { credits: string; debits: string; entries: string }[]
+      { magnitude: string; negative: boolean; entries: string }[]
     >(
-      `select coalesce(sum(amount) filter (where direction = 'CREDIT'), 0)::numeric(20,2)::text as credits,
-              coalesce(sum(amount) filter (where direction = 'DEBIT'), 0)::numeric(20,2)::text as debits,
-              count(*)::text as entries
-         from wallet_ledger_entries where wallet_id = ?`,
+      `select abs(net)::numeric(20,2)::text as magnitude, net < 0 as negative, entries
+         from (select coalesce(sum(case when direction = 'CREDIT' then amount else -amount end), 0) as net,
+                      count(*)::text as entries
+                 from wallet_ledger_entries where wallet_id = ?) totals`,
       [walletId],
     );
-    const credits = Money.from({ amount: row.credits, currency });
-    const debits = Money.from({ amount: row.debits, currency });
-    return { balance: credits.subtract(debits), entries: Number(row.entries) };
+    const magnitude = Money.from({ amount: row.magnitude, currency });
+    return {
+      balance: row.negative ? magnitude.negate() : magnitude,
+      entries: Number(row.entries),
+    };
   }
 
   async create(
