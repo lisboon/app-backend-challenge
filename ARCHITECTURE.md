@@ -186,6 +186,32 @@ antigo, com volume ou com `tmpfs`.
 - **`.dockerignore` em lista branca.** Só entram `package.json`, `bun.lock`,
   `tsconfig.json` e `src/`, nunca `.env`.
 
+### Por que MikroORM
+
+O §4 prefere MikroORM e aceita TypeORM. Ficamos com o MikroORM pelo que ele
+torna explícito e pelo que de fato usamos:
+
+| Recurso | Onde | Para quê |
+|---|---|---|
+| `em.fork()` por chamada, com `allowGlobalContext: false` | `MikroOrmTransactionManager`, `orm.config.ts` | cada transação tem o próprio Identity Map; usar o `EntityManager` global falha em vez de misturar estado entre requisições concorrentes |
+| `transactional()` com `isolationLevel` e `readOnly` | `execute` (`READ COMMITTED`) e `snapshot` (`REPEATABLE READ`, só leitura) | o nível de isolamento é escolhido por operação |
+| `LockMode.PESSIMISTIC_WRITE` | `WalletRepository.findByIdForUpdate` | o `SELECT ... FOR UPDATE` que serializa a wallet |
+| `nativeUpdate` com filtro e contagem de linhas | `WalletRepository.update` (por `version`), outbox, inbox, transação pendente | a escrita só vale se a linha ainda está no estado lido |
+| Migrator com `migrationsList` | `migrations/index.ts` | migrations versionadas e reversíveis, sem descoberta por glob, o que funciona no Bun e no CommonJS |
+
+**O que não usamos, de propósito: o Unit of Work implícito e o `flush()`.**
+Nenhum repositório chama `persist` ou `flush`; toda gravação é um `insert` ou
+um `nativeUpdate` feito pelo gateway, dentro do contexto da transação. Assim, a
+ordem das escritas é a do caso de uso (o lançamento antes da transação, com a
+FK verificada no commit), cada atualização confere quantas linhas mudou, e uma
+entidade alterada em memória nunca é gravada sem que um gateway peça. O
+domínio também não depende do ORM: os models e os mappers ficam em
+`repository/`, e as entidades são classes puras.
+
+O mapeamento do `Money` (`NUMERIC(20,2)` ↔ `p.decimal('string')` ↔
+`decimal.js`), com os testes que provam que nenhum valor passa por `number`,
+está na seção 2.
+
 ### MikroORM 7 num projeto CommonJS
 
 O MikroORM 7 só publica ESM. O projeto continua CommonJS: com `module: nodenext`,
@@ -308,6 +334,44 @@ A abertura com saldo positivo grava `WagerTransactionProcessed` de `OPENING` e
 não gera eventos. A publicação depois do commit está descrita na seção 9.
 
 ## 6. Transações e erros de banco
+
+### Estratégia de concorrência
+
+O §8 deixa a estratégia à escolha e exige justificativa. A unidade de
+concorrência é a wallet, e a estratégia é **lock pessimista por wallet em
+`READ COMMITTED`, com escrita condicionada à versão como defesa**:
+
+1. Toda operação que move saldo abre uma transação `READ COMMITTED` e trava a
+   wallet com `SELECT ... FOR UPDATE` antes de qualquer decisão. Idempotência,
+   estado da referência, reversões existentes e saldo são lidos com o lock
+   retido.
+2. A gravação da wallet é um `UPDATE ... WHERE id = ? AND version = ?`, que
+   precisa afetar exatamente uma linha, e o ledger tem
+   `UNIQUE (wallet_id, wallet_version)`. Se o lock fosse removido por engano,
+   uma atualização perdida viraria erro, não saldo errado.
+3. `lock_timeout` de 2 s limita a espera. Estourado, o `55P03` vira 503 com
+   `Retry-After` (seção 3), sem efeito, e o retry com a mesma chave é seguro.
+4. A ordem de lock é sempre wallet antes da linha da transação, inclusive no
+   resolver de pendências, que pega a linha com `SKIP LOCKED`. Com uma ordem
+   única não há ciclo de espera entre o submit e o resolver.
+5. A reconciliação usa `REPEATABLE READ` só leitura: saldo e soma do ledger
+   saem do mesmo snapshot, sem travar a wallet.
+
+O lock vive no PostgreSQL, então vale entre processos: o teste com três APIs e
+o de três workers usam a mesma garantia. A ordem FIFO do SQS por wallet é
+otimização (§8); quem decide é o lock.
+
+**Alternativas descartadas:**
+
+| Alternativa | Por que não |
+|---|---|
+| Otimista com retry limitado | Na hot wallet, todas as operações leem a mesma versão e só uma vence por rodada. Com n concorrentes, a rodada k tem n − k perdedores: a conta dá n(n + 1)/2 tentativas, 1.275 para as 50 apostas simultâneas do teste, contra 50 com o lock. Com um teto de retries, o excedente vira erro para o provedor. É análise, não medição; o teste de carga mede o pessimista |
+| Update atômico condicionado, sem lock (`balance = balance - x where balance >= x`) | Resolve o débito simples, mas não as decisões que dependem de várias linhas lidas antes do update: a busca da idempotency key, o estado da referência e a regra de uma reversão líquida por BET (seção 10). Entre a leitura e o update haveria uma janela de check-then-act. As constraints do schema pegariam parte disso como erro, mas o desfecho de negócio correto (`REJECTED` gravado) precisa da decisão serializada |
+| `SERIALIZABLE` | Também serializaria, mas por aborto: o conflito chega como `40001` depois do trabalho feito, e a hot wallet viraria uma sequência de retries, o mesmo problema do otimista |
+
+O custo assumido é que operações da mesma wallet são seriais: a vazão de uma
+hot wallet é limitada pela duração da transação. Wallets diferentes não
+compartilham lock e avançam em paralelo.
 
 Todo acesso ao banco passa pelo `TransactionManager`, inclusive as leituras.
 O adaptador abre um `EntityManager` isolado (`em.fork()`) por chamada e executa
