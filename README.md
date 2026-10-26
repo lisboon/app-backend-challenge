@@ -292,8 +292,9 @@ bun run test:load          # teste de carga, com 3 APIs e 2 workers
 ```
 
 O teste de carga sobe e derruba sozinho uma stack isolada (projeto
-`wager-load`, portas 3100–3102, 3201–3202 e 4700), roda os cenários e confere a
-reconciliação de toda wallet usada. Leva cerca de três minutos. Metodologia,
+`wager-load`, imagem `wagering-processor:load`, portas 3100–3102, 3201–3202 e
+4700), roda os cenários e confere a reconciliação de toda wallet usada. Leva de
+três a quatro minutos. Metodologia,
 números e interpretação estão em [`docs/load-test.md`](docs/load-test.md).
 
 ## Qualidade
