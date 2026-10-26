@@ -11,6 +11,12 @@ export async function openTestOrm(): Promise<MikroORM> {
 }
 
 export async function migrateFresh(orm: MikroORM): Promise<void> {
+  await orm.em.getConnection().execute(`do $$ begin
+  if to_regclass('wager_transactions') is not null then
+    set local session_replication_role = replica;
+    delete from wager_transactions where status = 'FAILED';
+  end if;
+end $$`);
   await orm.migrator.down({ to: 0 });
   await orm.migrator.up();
 }

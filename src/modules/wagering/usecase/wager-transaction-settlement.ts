@@ -46,17 +46,21 @@ export class WagerTransactionSettlement {
     await this.process(transaction, wallet, reference, at, trx);
   }
 
-  private referenceOf(
+  private async referenceOf(
     transaction: WagerTransaction,
     trx: TransactionContext,
   ): Promise<WagerTransaction | null> {
-    return transaction.referenceExternalTransactionId === undefined
-      ? Promise.resolve(null)
-      : this.wagers.findByExternalId(
-          transaction.providerId,
-          transaction.referenceExternalTransactionId,
-          trx,
-        );
+    if (transaction.referenceExternalTransactionId === undefined) {
+      return null;
+    }
+    const reference = await this.wagers.findByExternalId(
+      transaction.providerId,
+      transaction.referenceExternalTransactionId,
+      trx,
+    );
+    return reference?.status === WagerTransactionStatus.Failed
+      ? null
+      : reference;
   }
 
   private async awaitReference(

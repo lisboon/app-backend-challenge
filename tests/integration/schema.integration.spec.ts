@@ -48,6 +48,7 @@ interface TransactionRow {
   amount: string;
   kind?: string;
   providerId?: string;
+  externalTransactionId?: string;
   idempotencyKey?: string;
   roundId?: string | null;
   status?: string;
@@ -89,7 +90,7 @@ const insertTransaction = (em: EntityManager, tx: TransactionRow) => {
     [
       tx.id,
       providerId,
-      `ext-${tx.id}`,
+      tx.externalTransactionId ?? `ext-${tx.id}`,
       tx.idempotencyKey ?? `${providerId}:ext-${tx.id}`,
       HASH,
       tx.walletId,
@@ -1925,6 +1926,88 @@ describe('schema (integração com PostgreSQL real)', () => {
           [messageId],
         );
       expect(row.processed).toBe(true);
+    });
+  });
+
+  describe('FAILED não reserva o id externo', () => {
+    const transactionWith = (
+      opened: OpenedWallet,
+      externalTransactionId: string,
+      status: string,
+    ): TransactionRow => ({
+      id: uuid(),
+      walletId: opened.walletId,
+      playerId: opened.playerId,
+      currency: 'BRL',
+      amount: '1.00',
+      kind: 'BET',
+      externalTransactionId,
+      idempotencyKey: uuid(),
+      status,
+      failureCode:
+        status === 'FAILED' ? 'PROCESSING_FAILED' : 'INSUFFICIENT_BALANCE',
+      resultBalance: status === 'FAILED' ? null : '0.00',
+      resultCurrency: status === 'FAILED' ? null : 'BRL',
+    });
+
+    it('aceita FAILED e REJECTED com o mesmo id externo, mas não dois desfechos vivos', async () => {
+      const opened = await openWallet('0.00');
+      const externalTransactionId = uuid();
+      for (const status of ['FAILED', 'FAILED', 'REJECTED']) {
+        await inTransaction((em) =>
+          insertTransaction(
+            em,
+            transactionWith(opened, externalTransactionId, status),
+          ),
+        );
+      }
+
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            insertTransaction(
+              em,
+              transactionWith(opened, externalTransactionId, 'REJECTED'),
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23505', constraint: 'wager_tx_external_uk' });
+    });
+
+    it('reverter recusa quando há FAILED repetindo um id externo e restaura a constraint sem ele', async () => {
+      const opened = await openWallet('0.00');
+      const externalTransactionId = uuid();
+      const failed = transactionWith(opened, externalTransactionId, 'FAILED');
+      await inTransaction((em) => insertTransaction(em, failed));
+      await inTransaction((em) =>
+        insertTransaction(
+          em,
+          transactionWith(opened, externalTransactionId, 'REJECTED'),
+        ),
+      );
+
+      expect(
+        await failureOf(() =>
+          orm.migrator.down({ to: 'Migration20261025000007FailedTransitions' }),
+        ),
+      ).toMatchObject({ message: expect.stringContaining('apagar auditoria') });
+
+      await inTransaction(async (em) => {
+        await em.execute('set local session_replication_role = replica');
+        await em.execute(
+          "delete from wager_transactions t where status = 'FAILED' and exists (select 1 from wager_transactions o where o.provider_id = t.provider_id and o.external_transaction_id = t.external_transaction_id and o.id <> t.id)",
+        );
+      });
+      await orm.migrator.down({
+        to: 'Migration20261025000007FailedTransitions',
+      });
+      const [constraint] = await orm.em
+        .fork()
+        .execute<{ type: string }[]>(
+          "select contype as type from pg_constraint where conname = 'wager_tx_external_uk'",
+        );
+      expect(constraint).toEqual({ type: 'u' });
+      await orm.migrator.up();
     });
   });
 });

@@ -605,7 +605,8 @@ A mesma chave enviada para wallets diferentes não compartilha lock. O índice
 único resolve a disputa: o perdedor recebe `23505`, o caso de uso refaz a
 tentativa uma vez com um candidato novo, encontra a transação do vencedor e
 responde conforme o payload. O mesmo `externalTransactionId` com outra chave
-é `EXTERNAL_TRANSACTION_CONFLICT` (409).
+é `EXTERNAL_TRANSACTION_CONFLICT` (409), a menos que a transação gravada com
+ele seja `FAILED` (seção 11).
 
 `lock_timeout` de 2 s limita a espera pelo lock. Estourado, o PostgreSQL
 devolve `55P03`, que vira `503` com `Retry-After`, sem efeito: o cliente
@@ -815,11 +816,13 @@ não pode referenciar a si mesma (`REFERENCE_SELF`, 400, e
 `wager_tx_reference_not_self_ck` no schema): ela ficaria esperando por ela
 própria. Player, wallet, moeda e rodada precisam coincidir. A busca já garante
 o mesmo provedor e o id externo; o trigger SQL confere de novo os dois.
-Referência terminal não processada (`REJECTED` ou `FAILED`) é recusada com
-`REFERENCE_NOT_PROCESSED`; referência inexistente ou ainda `PENDING_REFERENCE`
-deixa a operação pendente. Antes da seção 11, só `REJECTED` era recusada, e uma
-reversão de um `FAILED` ficaria pendente para sempre, porque o TTL só expira
-referência ausente.
+Referência `REJECTED` é recusada com `REFERENCE_NOT_PROCESSED`; referência
+inexistente ou ainda `PENDING_REFERENCE` deixa a operação pendente. Uma
+referência que só tem `FAILED` conta como inexistente: o provedor pode reenviá-la
+com o mesmo id externo (seção 11), e a reversão espera esse reenvio ou expira no
+TTL com `REFERENCE_NOT_FOUND`. Recusá-la seria impedir o jogo de desfazer a
+transação reenviada, e tratá-la como existente a deixaria pendente para sempre,
+porque o TTL só expira referência ausente.
 Somente `PROCESSED` pode ser aplicada. `OPENING` nunca serve como referência.
 
 A referência externa é obrigatória em `REFUND`/`ROLLBACK` e opcional em `WIN`.
@@ -1063,7 +1066,16 @@ transação fica auditável pela linha, pelo atributo da DLQ, pelo log
 É terminal. Reprocessar a mensagem da DLQ depois de corrigir a causa não muda
 nada: a inbox já marcou a entrega, e a mesma chave responde com o `FAILED`
 gravado, tanto pela fila quanto pela HTTP (500). Para tentar de novo, o
-provedor usa outra chave. Se, numa corrida, a chave já tiver um desfecho
+provedor usa outra chave com o mesmo `externalTransactionId`. O índice
+`wager_tx_external_uk` é parcial (`status <> 'FAILED'`): o `FAILED` fica
+gravado para auditoria, mas não reserva o id externo, e o reenvio aplica a
+transação uma vez. Dois desfechos vivos com o mesmo id externo continuam
+impossíveis. A consulta por id externo devolve o desfecho vivo e, sem ele, o
+`FAILED` mais recente. Antes, o `FAILED` reservava o id para sempre: o reenvio
+recebia 409 e um WIN que falhou nunca era pago com o id original, até as
+revisões do projeto mostrarem o caso. Reverter a migration recusa enquanto
+houver `FAILED` repetindo um id externo, porque voltar exigiria apagar
+auditoria. Se, numa corrida, a chave já tiver um desfecho
 gravado por outra entrega, o `FAILED` não é gravado e a mensagem vai para a
 DLQ do mesmo jeito; preferimos uma DLQ visível a confirmar uma entrega que
 falhou.
@@ -1212,7 +1224,7 @@ indicada.
 | Lock pessimista por wallet | a hot wallet é serial: 61 a 76 op/s no teste de carga; acima da capacidade, 503 rápido com `Retry-After`, sem efeito | 6, `docs/load-test.md` |
 | Uma mensagem por `ReceiveMessage` | duas idas ao SQS por mensagem; a fila fez 104 a 129 mensagens/s contra 280 a 400 op/s da HTTP no mesmo ambiente | 11 |
 | Contrato estrito na fila | um campo novo do produtor vai para a DLQ até o contrato mudar | 11 |
-| `FAILED` terminal | reprocessar da DLQ não reaplica; o provedor reenvia com outra chave | 11 |
+| `FAILED` terminal | reprocessar da DLQ não reaplica; o provedor reenvia com outra chave e o mesmo id externo | 11 |
 | Outbox at-least-once, sem limite de tentativas | sob carga o lag chegou a 21 s e zerou depois; o consumidor de eventos deduplica por `eventId` | 9 |
 | Camadas, portas e factories | mais arquivos por operação; em troca, fronteiras impostas pelo lint e casos de uso testáveis sem infraestrutura | 1 |
 

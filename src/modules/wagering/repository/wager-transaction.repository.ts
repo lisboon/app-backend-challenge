@@ -141,12 +141,24 @@ export class WagerTransactionRepository implements WagerTransactionGateway {
     return this.findOne({ providerId, idempotencyKey }, trx);
   }
 
-  findByExternalId(
+  async findByExternalId(
     providerId: string,
     externalTransactionId: string,
     trx: TransactionContext,
   ): Promise<WagerTransaction | null> {
-    return this.findOne({ providerId, externalTransactionId }, trx);
+    const em = entityManagerOf(trx);
+    const row =
+      (await em.findOne(WagerTransactionModel, {
+        providerId,
+        externalTransactionId,
+        status: { $ne: 'FAILED' },
+      })) ??
+      (await em.findOne(
+        WagerTransactionModel,
+        { providerId, externalTransactionId },
+        { orderBy: { createdAt: 'desc' } },
+      ));
+    return row ? WagerTransactionModelMapper.toEntity(row) : null;
   }
 
   private async findOne(

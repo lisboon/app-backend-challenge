@@ -4,6 +4,7 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { payloadHash } from '../../src/modules/@shared/domain/payload-hash';
+import { ExternalTransactionConflictError } from '../../src/modules/wagering/domain/errors/wagering.errors';
 import {
   WageringFactory,
   type WageringUseCases,
@@ -170,7 +171,46 @@ describe('registro de FAILED com PostgreSQL real', () => {
     ).toBe(0);
   });
 
-  it('reversão de uma referência FAILED é rejeitada em vez de ficar pendente', async () => {
+  const balanceOf = async (walletId: string): Promise<string> =>
+    (
+      (await (await fetch(`${baseUrl}/wallets/${walletId}`)).json()) as {
+        balance: { amount: string };
+      }
+    ).balance.amount;
+
+  it('FAILED libera o id externo: o reenvio com outra chave aplica uma vez', async () => {
+    const wallet = await open();
+    const failed = input(wallet);
+    const { transactionId: failedId } = await recordFailure(failed);
+
+    const resent = await useCases.submit.execute({
+      ...failed,
+      idempotencyKey: uuid(),
+    });
+
+    expect(resent).toMatchObject({ status: 'PROCESSED', failureCode: null });
+    expect(await balanceOf(wallet.walletId)).toBe('90.00');
+    expect(
+      await useCases.findByExternalId.execute({
+        providerId: failed.providerId,
+        externalTransactionId: failed.externalTransactionId,
+      }),
+    ).toMatchObject({
+      transactionId: resent.transactionId,
+      status: 'PROCESSED',
+    });
+    expect(
+      await useCases.findById.execute({ id: failedId ?? '' }),
+    ).toMatchObject({ status: 'FAILED' });
+    expect(
+      await useCases.submit
+        .execute({ ...failed, idempotencyKey: uuid() })
+        .catch((error: unknown) => error),
+    ).toBeInstanceOf(ExternalTransactionConflictError);
+    await invariant(wallet.walletId);
+  });
+
+  it('reversão de uma referência que só tem FAILED espera o reenvio e aplica depois', async () => {
     const wallet = await open();
     const failed = input(wallet);
     await recordFailure(failed);
@@ -181,11 +221,50 @@ describe('registro de FAILED com PostgreSQL real', () => {
       providerId: failed.providerId,
       referenceExternalTransactionId: failed.externalTransactionId,
     });
+    expect(refund).toMatchObject({ status: 'PENDING_REFERENCE' });
 
-    expect(refund).toMatchObject({
-      status: 'REJECTED',
-      failureCode: 'REFERENCE_NOT_PROCESSED',
+    await useCases.submit.execute({ ...failed, idempotencyKey: uuid() });
+    await useCases.resolvePending.execute({ limit: 100 });
+
+    expect(
+      await useCases.findById.execute({ id: refund.transactionId }),
+    ).toMatchObject({ status: 'PROCESSED' });
+    expect(await balanceOf(wallet.walletId)).toBe('100.00');
+    await invariant(wallet.walletId);
+  });
+
+  it('reversão de uma referência que só tem FAILED expira no TTL', async () => {
+    let now = Date.now();
+    const expiring = WageringFactory.create({
+      transactions: new MikroOrmTransactionManager(orm),
+      ids: { next: uuid },
+      clock: { now: () => new Date(now) },
+      pendingMonitor: {
+        pending: () => undefined,
+        resolved: () => undefined,
+        retryScheduled: () => undefined,
+        failed: () => undefined,
+      },
+      wagerMonitor: monitor,
+      pendingReferenceTtlSeconds: 60,
     });
+    const wallet = await open();
+    const failed = input(wallet);
+    await recordFailure(failed);
+    const refund = await expiring.submit.execute({
+      ...input(wallet),
+      kind: 'REFUND',
+      providerId: failed.providerId,
+      referenceExternalTransactionId: failed.externalTransactionId,
+    });
+    expect(refund).toMatchObject({ status: 'PENDING_REFERENCE' });
+
+    now += 61_000;
+    await expiring.resolvePending.execute({ limit: 100 });
+
+    expect(
+      await useCases.findById.execute({ id: refund.transactionId }),
+    ).toMatchObject({ status: 'REJECTED', failureCode: 'REFERENCE_NOT_FOUND' });
     await invariant(wallet.walletId);
   });
 });
