@@ -46,10 +46,14 @@ export class WagerTransactionSettlement {
     await this.process(transaction, wallet, reference, at, trx);
   }
 
-  scheduleRetry(transaction: WagerTransaction, at: Date): void {
+  scheduleRetry(
+    transaction: WagerTransaction,
+    at: Date,
+    referenceFound = false,
+  ): void {
     transaction.scheduleReferenceRetry(
       at,
-      transaction.referenceExpired(at, this.ttlSeconds)
+      referenceFound || transaction.referenceExpired(at, this.ttlSeconds)
         ? undefined
         : this.ttlSeconds,
     );
@@ -100,10 +104,7 @@ export class WagerTransactionSettlement {
       );
       return;
     }
-    transaction.scheduleReferenceRetry(
-      at,
-      reference ? undefined : this.ttlSeconds,
-    );
+    this.scheduleRetry(transaction, at, reference !== null);
   }
 
   private async process(
