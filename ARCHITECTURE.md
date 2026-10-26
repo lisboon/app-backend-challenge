@@ -415,7 +415,7 @@ aparece nos dois casos:
 | `23505` em `wager_tx_idempotency_uk` | nova tentativa do submit, que encontra a transação gravada (seção 8) |
 | `23505` em `wager_tx_external_uk` | `EXTERNAL_TRANSACTION_CONFLICT` (409) |
 | `23505` em `wager_tx_single_reversal_uk` | `REFERENCE_ALREADY_REVERSED`; o submit refaz uma tentativa e registra a rejeição de negócio (422) |
-| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `57P01`–`57P03`, timeout de conexão do pool, `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
+| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `25P03` (sessão ociosa encerrada no meio da transação), `57P01`–`57P03`, timeout de conexão do pool, cliente do `pg` que perdeu a conexão ("is not queryable", sem código), `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
 | qualquer outro | 500, porque é defeito, não condição de negócio |
 
 **Conflitos de lock são contados antes da tradução.** O `55P03` (lock não
@@ -456,10 +456,20 @@ MikroORM depender da 0.29.7.
 `pg_terminate_backend` com a operação bloqueada dentro da transação, em toda
 rota da API e nos ciclos do worker, com pool pequeno. Com o kysely antigo, os
 oito testes falham e o encerramento trava; com o atual, a falha responde 503 ou vira retry, sem efeito
-parcial, e a operação seguinte funciona. Resta um custo conhecido: o `pg` não
-marca como morto o cliente cujo backend foi encerrado, e ele volta ao pool. O
-próximo uso dele falha uma vez, também como transitório, e só então é
-descartado. É uma falha a mais por queda, sem efeito em dado.
+parcial, e a operação seguinte funciona.
+
+**A queda também pode acontecer entre dois comandos.** Num restart do
+PostgreSQL, a conexão pode cair enquanto a transação está entre um comando e o
+seguinte. O `pg` então não devolve um SQLSTATE: o comando seguinte falha com
+"Client has encountered a connection error and is not queryable". Quando o
+servidor encerra a sessão ociosa no meio da transação, chega `25P03`. Os dois
+viravam 500 até uma avaliação externa reproduzir o restart; hoje são
+transitórios, pelo mesmo critério do `57P01`: a transação já foi desfeita pelo
+servidor, e repetir é seguro. O spec cobre os dois: a conexão encerrada entre
+dois comandos na `TransactionManager` real, e as rotas chamadas com
+`idle_in_transaction_session_timeout` de 1 ms, sem nenhuma resposta 500. O
+cliente cujo backend foi encerrado ainda pode voltar ao pool e falhar uma vez
+no uso seguinte, agora como 503, antes de ser descartado.
 
 **Concorrência na abertura.** Vinte `POST /wallets` simultâneos para o mesmo
 player e moeda resultam em um 201 e dezenove 409. O índice único serializa as
@@ -1142,8 +1152,8 @@ indicada.
 - **Sem Identity Provider.** O ponto de extensão existe e é testado; o desenho
   com Keycloak está descrito (seção 13).
 - **Uma falha a mais por queda de conexão.** O cliente do `pg` cujo backend foi
-  encerrado volta ao pool e falha uma vez, como transitório, antes de ser
-  descartado (seção 6).
+  encerrado volta ao pool e falha uma vez, como 503, antes de ser descartado
+  (seção 6).
 - **Override do kysely 0.29.7** até o MikroORM depender dessa versão (seção 6).
 - **Conexões:** processos × `DATABASE_POOL_MAX` precisa caber no
   `max_connections`; acima disso, o caminho é um PgBouncer, que não está no

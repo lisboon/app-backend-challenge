@@ -10,6 +10,7 @@ const TRANSIENT_CODES = new Set([
   '08003',
   '08004',
   '08006',
+  '25P03',
   '57P01',
   '57P02',
   '57P03',
@@ -21,6 +22,7 @@ const TRANSIENT_CODES = new Set([
 const CONNECTION_MESSAGES = [
   /timeout exceeded when trying to connect/i,
   /connection terminated/i,
+  /is not queryable/i,
 ];
 
 interface DriverErrorShape {
