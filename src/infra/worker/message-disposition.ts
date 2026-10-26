@@ -6,13 +6,13 @@ import {
 } from '../../modules/@shared/domain/failure-code';
 
 export type MessageDisposition =
-  | { action: 'acknowledge' }
+  | { action: 'acknowledge'; reason: 'processed' | 'duplicate' }
   | { action: 'retry' }
   | { action: 'dead-letter'; failureCode: FailureCode };
 
 export function dispositionOfFailure(error: unknown): MessageDisposition {
   if (error instanceof DuplicateMessageError) {
-    return { action: 'acknowledge' };
+    return { action: 'acknowledge', reason: 'duplicate' };
   }
   if (!(error instanceof DomainError)) {
     return { action: 'dead-letter', failureCode: FailureCode.INTERNAL_ERROR };

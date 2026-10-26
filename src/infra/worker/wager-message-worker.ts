@@ -36,6 +36,8 @@ export const RECORD_FAILURE_FOR_DELIVERY = Symbol(
   'RECORD_FAILURE_FOR_DELIVERY',
 );
 
+export const WAGER_CONSUMER_MONITOR = Symbol('WAGER_CONSUMER_MONITOR');
+
 export const WAGER_CONSUMER_NAME = 'wager-transactions';
 
 const IDLE_AFTER_FAILURE_MS = 1000;
@@ -60,6 +62,10 @@ export type RecordFailureForDelivery = (
   delivery: InboxDelivery,
 ) => RecordFailedWagerTransactionUseCaseInterface;
 
+export interface WagerConsumerMonitor {
+  handled(disposition: MessageDisposition, seconds: number): void;
+}
+
 @Injectable()
 export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WagerMessageWorker.name);
@@ -75,6 +81,8 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
     @Inject(SUBMIT_FOR_DELIVERY) private readonly submitFor: SubmitForDelivery,
     @Inject(RECORD_FAILURE_FOR_DELIVERY)
     private readonly recordFailureFor: RecordFailureForDelivery,
+    @Inject(WAGER_CONSUMER_MONITOR)
+    private readonly monitor: WagerConsumerMonitor,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
@@ -122,11 +130,14 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handle(message: ReceivedWagerMessage): Promise<void> {
+    const startedAt = performance.now();
     const parsed = parseMessage(message.body);
     const { disposition, transactionId } = parsed
       ? await this.submit(parsed)
       : INVALID_MESSAGE;
     await this.settle(message, disposition);
+    const seconds = (performance.now() - startedAt) / 1000;
+    this.monitor.handled(disposition, seconds);
     this.logger.log({
       event: 'wager_message_handled',
       messageId: parsed?.messageId,
@@ -140,6 +151,7 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
           ? disposition.failureCode
           : undefined,
       receiveCount: message.receiveCount,
+      durationMs: Math.round(seconds * 1000),
     });
   }
 
@@ -155,7 +167,7 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
         correlationId: message.messageId,
       });
       return {
-        disposition: { action: 'acknowledge' },
+        disposition: { action: 'acknowledge', reason: 'processed' },
         transactionId: result.transactionId,
       };
     } catch (error) {

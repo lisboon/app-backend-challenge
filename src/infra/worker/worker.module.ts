@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { SQSClient } from '@aws-sdk/client-sqs';
+import { Registry } from 'prom-client';
 
 import type { TransactionManager } from '../../modules/@shared/domain/transaction/transaction-manager';
 import { OutboxFactory } from '../../modules/@shared/factory/outbox.factory';
@@ -26,6 +27,7 @@ import {
   PENDING_REFERENCE_MONITOR,
   WAGER_TRANSACTION_MONITOR,
 } from '../observability/observability.module';
+import { PrometheusWagerConsumerMonitor } from '../observability/wager-consumer-monitor';
 import { QueueModule } from '../queue/queue.module';
 import { SqsEventPublisher } from '../queue/sqs-event-publisher';
 import { WagerQueue } from '../queue/wager-queue';
@@ -40,6 +42,7 @@ import {
   type RecordFailureForDelivery,
   SUBMIT_FOR_DELIVERY,
   type SubmitForDelivery,
+  WAGER_CONSUMER_MONITOR,
   WAGER_QUEUE,
   WagerMessageWorker,
 } from './wager-message-worker';
@@ -110,6 +113,15 @@ const WAGERING_USE_CASES = Symbol('WAGERING_USE_CASES');
           config.sqs.wagerQueueName,
           config.sqs.wagerDeadLetterQueueName,
         ),
+    },
+    {
+      provide: WAGER_CONSUMER_MONITOR,
+      inject: [Registry, WAGER_QUEUE],
+      useFactory: (
+        registry: Registry,
+        queue: WagerQueue,
+      ): PrometheusWagerConsumerMonitor =>
+        new PrometheusWagerConsumerMonitor(registry, queue),
     },
     {
       provide: PUBLISH_OUTBOX,

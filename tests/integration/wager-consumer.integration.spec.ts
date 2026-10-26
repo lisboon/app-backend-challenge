@@ -9,8 +9,10 @@ import {
 } from 'bun:test';
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
+import { Registry } from 'prom-client';
 
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
+import { PrometheusWagerConsumerMonitor } from '../../src/infra/observability/wager-consumer-monitor';
 import { WagerQueue } from '../../src/infra/queue/wager-queue';
 import { WagerMessageWorker } from '../../src/infra/worker/wager-message-worker';
 import { FailureCode } from '../../src/modules/@shared/domain/failure-code';
@@ -59,6 +61,7 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
   let queues: WagerQueues;
   let useCases: WageringUseCases;
   let worker: WagerMessageWorker | undefined;
+  const registry = new Registry();
 
   beforeAll(async () => {
     orm = await openTestOrm();
@@ -85,15 +88,20 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
 
   afterEach(async () => {
     await worker?.onModuleDestroy();
+    registry.clear();
     worker = undefined;
     await queues.close();
   });
 
+  const metrics = (): Promise<string> => registry.metrics();
+
   const startConsumer = (): void => {
+    const queue = new WagerQueue(sqs, queues.sourceName, queues.deadLetterName);
     worker = new WagerMessageWorker(
-      new WagerQueue(sqs, queues.sourceName, queues.deadLetterName),
+      queue,
       useCases.submitFor,
       useCases.recordFailureFor,
+      new PrometheusWagerConsumerMonitor(registry, queue),
       testAppConfig(),
     );
     worker.onModuleInit();
@@ -204,6 +212,9 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
         [body.data.externalTransactionId, body.messageId],
       ),
     ).toBe(1);
+    expect(await metrics()).toContain(
+      'wager_message_processing_seconds_count{outcome="processed"} 1',
+    );
     await invariant(wallet.walletId);
   });
 
@@ -218,6 +229,7 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
     expect(await balanceOf(wallet.walletId)).toBe('90.00');
     expect(await debits(wallet.walletId)).toBe(1);
     expect(await receiveDeadLetters(sqs, queues.deadLetterUrl)).toEqual([]);
+    expect(await metrics()).toContain('inbox_duplicates_total 1');
   });
 
   it('a mesma idempotencyKey em mensagens diferentes vira replay sem novo débito', async () => {
@@ -289,6 +301,9 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
       );
       await eventually(drained);
       expect(await balanceOf(wallet.walletId)).toBe('100.00');
+      expect(await metrics()).toContain(
+        `wager_messages_dead_lettered_total{failure_code="${failureCode}"} 1`,
+      );
     },
   );
 
@@ -336,6 +351,9 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
     );
     expect(await debits(wallet.walletId)).toBe(1);
     expect(await receiveDeadLetters(sqs, queues.deadLetterUrl)).toEqual([]);
+    expect(
+      Number((await metrics()).match(/wager_message_retries_total (\d+)/)?.[1]),
+    ).toBeGreaterThanOrEqual(1);
   }, 40_000);
 
   it('conexão do banco derrubada no meio do processamento é transitória, não FAILED', async () => {
@@ -393,10 +411,13 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
     startConsumer();
 
     await eventually(
-      async () =>
-        (await receiveDeadLetters(sqs, queues.deadLetterUrl)).length === 1,
+      async () => (await metrics()).includes('wager_dlq_messages 1'),
       60_000,
     );
+    expect(await metrics()).not.toContain(
+      'wager_messages_dead_lettered_total{',
+    );
+    expect(await receiveDeadLetters(sqs, queues.deadLetterUrl)).toHaveLength(1);
     await release();
     expect(await balanceOf(wallet.walletId)).toBe('100.00');
     expect(await debits(wallet.walletId)).toBe(0);

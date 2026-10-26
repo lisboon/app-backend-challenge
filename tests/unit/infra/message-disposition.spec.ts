@@ -24,6 +24,7 @@ describe('dispositionOfFailure', () => {
   it('duplicata da inbox é confirmada sem novo efeito', () => {
     expect(dispositionOfFailure(new DuplicateMessageError())).toEqual({
       action: 'acknowledge',
+      reason: 'duplicate',
     });
   });
 

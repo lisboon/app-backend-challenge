@@ -162,6 +162,35 @@ describe('processos consumidores com PostgreSQL e LocalStack reais', () => {
     expect(await receiveDeadLetters(sqs, queues.deadLetterUrl)).toEqual([]);
   }, 120_000);
 
+  it('o worker real expõe latência, duplicatas e profundidade da DLQ na porta de métricas', async () => {
+    const wallet = await open('100.00');
+    const body = message(wallet, '10.00');
+    await sendWagerMessage(sqs, queues.sourceUrl, body, wallet.walletId);
+    await sendWagerMessage(sqs, queues.sourceUrl, body, wallet.walletId);
+    const port = freePort();
+    startWorker({
+      WORKER_METRICS_PORT: String(port),
+      CONSUMER_CONCURRENCY: '1',
+    });
+
+    await eventually(
+      async () => (await approximateMessages(sqs, queues.sourceUrl)) === 0,
+      30_000,
+    );
+    let metrics = '';
+    await eventually(async () => {
+      metrics = await (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
+      return metrics.includes('inbox_duplicates_total 1');
+    }, 15_000);
+    expect(metrics).toContain(
+      'wager_message_processing_seconds_count{outcome="processed"} 1',
+    );
+    expect(metrics).toContain('wager_dlq_messages 0');
+    expect(metrics).toContain(
+      'wager_transactions_total{status="PROCESSED",kind="BET"} 1',
+    );
+  }, 60_000);
+
   it('worker morto depois do commit e antes do ack não duplica o débito', async () => {
     const wallet = await open('100.00');
     const body = message(wallet, '10.00');

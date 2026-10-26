@@ -1,6 +1,7 @@
 import {
   ChangeMessageVisibilityCommand,
   DeleteMessageCommand,
+  GetQueueAttributesCommand,
   ReceiveMessageCommand,
   SendMessageCommand,
   type SQSClient,
@@ -99,5 +100,21 @@ export class WagerQueue {
       }),
     );
     await this.acknowledge(message);
+  }
+
+  async deadLetterDepth(): Promise<number> {
+    const { Attributes } = await this.sqs.send(
+      new GetQueueAttributesCommand({
+        QueueUrl: await this.deadLetter.resolve(),
+        AttributeNames: [
+          'ApproximateNumberOfMessages',
+          'ApproximateNumberOfMessagesNotVisible',
+        ],
+      }),
+    );
+    return (
+      Number(Attributes?.ApproximateNumberOfMessages ?? '0') +
+      Number(Attributes?.ApproximateNumberOfMessagesNotVisible ?? '0')
+    );
   }
 }
