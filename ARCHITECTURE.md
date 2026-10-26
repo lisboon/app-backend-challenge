@@ -1262,11 +1262,12 @@ indicada.
 
 | Escolha | Custo | Seção |
 |---|---|---|
-| Lock pessimista por wallet | a hot wallet é serial: 61 a 76 op/s no teste de carga; acima da capacidade, 503 rápido com `Retry-After`, sem efeito | 6, `docs/load-test.md` |
-| Uma mensagem por `ReceiveMessage` | duas idas ao SQS por mensagem; a fila fez 104 a 129 mensagens/s contra 280 a 400 op/s da HTTP no mesmo ambiente | 11 |
+| Lock pessimista por wallet | a hot wallet é serial: 40 a 87 op/s no teste de carga; acima da capacidade, 503 rápido com `Retry-After`, sem efeito | 6, `docs/load-test.md` |
+| Uma mensagem por `ReceiveMessage` | duas idas ao SQS por mensagem; a fila fez 99 a 113 mensagens/s contra 232 a 347 op/s da HTTP no mesmo ambiente | 11 |
 | Contrato estrito na fila | um campo novo do produtor vai para a DLQ até o contrato mudar | 11 |
 | `FAILED` terminal | reprocessar da DLQ não reaplica; o provedor reenvia com outra chave e o mesmo id externo | 11 |
-| Outbox at-least-once, sem limite de tentativas | sob carga o lag chegou a 21 s e zerou depois; o consumidor de eventos deduplica por `eventId` | 9 |
+| Outbox at-least-once, sem limite de tentativas | sob carga o lag chegou a 11 s e zerou depois; o consumidor de eventos deduplica por `eventId` | 9 |
+| Publicador sem pausa com lote cheio | o lag caiu pela metade, mas a consulta do lote disputa CPU do PostgreSQL e a hot wallet perdeu vazão (média de 63 contra 81 op/s, com 503 ocasional) no teste de carga | 9, `docs/load-test.md` |
 | Camadas, portas e factories | mais arquivos por operação; em troca, fronteiras impostas pelo lint e casos de uso testáveis sem infraestrutura | 1 |
 
 **Limitações conhecidas**
