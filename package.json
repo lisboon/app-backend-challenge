@@ -1,0 +1,56 @@
+{
+  "name": "app-backend-challenge",
+  "version": "0.0.1",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "nest build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "bun run --watch src/infra/http/main.ts",
+    "start": "bun run src/infra/http/main.ts",
+    "migrate:up": "bun src/infra/database/migrate.ts up",
+    "migrate:down": "bun src/infra/database/migrate.ts down",
+    "migrate:status": "bun src/infra/database/migrate.ts status",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "lint": "oxlint --type-aware src/ tests/ scripts/ && bun scripts/check-imports.ts",
+    "test": "bun test tests/unit",
+    "test:watch": "bun test --watch tests/unit",
+    "test:cov": "bun test --coverage tests/unit",
+    "test:e2e": "bun test tests/e2e",
+    "test:integration": "bun test --timeout 30000 tests/integration",
+    "test:load": "bun tests/load/run.ts",
+    "infra:test:up": "docker compose --profile test up -d --wait postgres-test sqs-test",
+    "infra:test:down": "docker compose --profile test rm -sfv postgres-test sqs-test",
+    "start:worker": "bun run src/infra/worker/main.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "3.1149.0",
+    "@mikro-orm/core": "7.2.5",
+    "@mikro-orm/migrations": "7.2.5",
+    "@mikro-orm/postgresql": "7.2.5",
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/platform-express": "^12.0.1",
+    "decimal.js": "^10.6.0",
+    "prom-client": "15.1.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^12.0.0",
+    "@nestjs/schematics": "^12.0.0",
+    "@nestjs/testing": "^12.0.1",
+    "@types/bun": "1.4.4",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "oxlint": "^1.58.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "prettier": "^3.4.2",
+    "source-map-support": "^0.5.21",
+    "typescript": "^6.0.2"
+  },
+  "overrides": {
+    "kysely": "0.29.7"
+  }
+}

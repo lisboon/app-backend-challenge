@@ -1,0 +1,12 @@
+services:
+  postgres:
+    ports: !reset []
+
+  sqs:
+    ports: !override ["127.0.0.1:4700:4566"]
+
+  api:
+    ports: !override ["127.0.0.1:3100-3102:3000"]
+
+  worker:
+    ports: !override ["127.0.0.1:3201-3202:3001"]
