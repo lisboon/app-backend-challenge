@@ -1283,6 +1283,10 @@ indicada.
 - **Métricas por processo.** Contadores reiniciam com o processo, e as gauges
   de pendências e de DLQ observam o total, não devem ser somadas entre
   instâncias (seções 10 e 12). `OPENING` fica fora de `wager_transactions_total`.
+- **Pendência que termina em `FAILED` não publica evento de fechamento.** Quem
+  consome eventos viu `WagerTransactionPendingReference` e não recebe o
+  desfecho, porque a lista do enunciado não tem evento de `FAILED` (seção 11).
+  O desfecho fica na consulta da transação e nas métricas.
 - **Teste de carga numa máquina só**, com SQS emulado: os números comparam
   cenários, não medem capacidade de produção (`docs/load-test.md`).
 - **Windows.** Os testes de `SIGTERM` só rodam em Linux, e fora de container o
