@@ -456,13 +456,13 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       await invariant(wallet.walletId);
     });
 
-    it('20 reenvios simultâneos da mesma chave aplicam uma única vez', async () => {
+    it('a mesma aposta enviada 50 vezes em paralelo gera um único débito', async () => {
       const wallet = await open('100.00');
       const body = wager(wallet);
       const key = uuid();
 
       const results = (await Promise.all(
-        Array.from({ length: 20 }, () =>
+        Array.from({ length: 50 }, () =>
           submitEventually(body, key).then((response) => response.json()),
         ),
       )) as Submitted[];
@@ -473,6 +473,12 @@ describe('wagering (integração HTTP com PostgreSQL real)', () => {
       expect(results.filter((result) => !result.idempotentReplay)).toHaveLength(
         1,
       );
+      expect(
+        await count(
+          "select count(*) as n from wallet_ledger_entries where wallet_id = ? and direction = 'DEBIT'",
+          [wallet.walletId],
+        ),
+      ).toBe(1);
       expect(await balanceOf(wallet.walletId)).toBe('90.00');
       await invariant(wallet.walletId);
     });

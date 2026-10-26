@@ -9,7 +9,11 @@ import {
   type WageringUseCases,
 } from '../../src/modules/wagering/factory/wagering.factory';
 import type { SubmitWagerTransactionUseCaseInputDto } from '../../src/modules/wagering/usecase/submit/submit.usecase.dto';
-import { migrateFresh, openTestOrm } from '../support/database';
+import {
+  ledgerMatchesBalance,
+  migrateFresh,
+  openTestOrm,
+} from '../support/database';
 import { startApp } from '../support/http-app';
 
 const uuid = (): string => Bun.randomUUIDv7();
@@ -82,6 +86,11 @@ describe('registro de FAILED com PostgreSQL real', () => {
       })
       .execute(data);
 
+  const invariant = async (walletId: string): Promise<void> => {
+    const state = await ledgerMatchesBalance(orm, walletId);
+    expect(state.stored).toBe(state.rebuilt);
+  };
+
   const count = async (sql: string, params: unknown[]): Promise<number> => {
     const [row] = await orm.em.fork().execute<{ n: string }[]>(sql, params);
     return Number(row.n);
@@ -117,6 +126,7 @@ describe('registro de FAILED com PostgreSQL real', () => {
         }
       ).balance.amount,
     ).toBe('100.00');
+    await invariant(wallet.walletId);
   });
 
   it('não sobrescreve a chave que já tem desfecho', async () => {
@@ -136,6 +146,7 @@ describe('registro de FAILED com PostgreSQL real', () => {
         [data.idempotencyKey],
       ),
     ).toBe(1);
+    await invariant(wallet.walletId);
   });
 
   it('wallet inexistente não ganha transação órfã', async () => {
@@ -166,5 +177,6 @@ describe('registro de FAILED com PostgreSQL real', () => {
       status: 'REJECTED',
       failureCode: 'REFERENCE_NOT_PROCESSED',
     });
+    await invariant(wallet.walletId);
   });
 });
