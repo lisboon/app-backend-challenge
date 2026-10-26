@@ -469,8 +469,18 @@ aparece nos dois casos:
 | `23505` em `wager_tx_idempotency_uk` | nova tentativa do submit, que encontra a transação gravada (seção 8) |
 | `23505` em `wager_tx_external_uk` | `EXTERNAL_TRANSACTION_CONFLICT` (409) |
 | `23505` em `wager_tx_single_reversal_uk` | `REFERENCE_ALREADY_REVERSED`; o submit refaz uma tentativa e registra a rejeição de negócio (422) |
-| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `25P03` (sessão ociosa encerrada no meio da transação), `57P01`–`57P03`, timeout de conexão do pool, cliente do `pg` que perdeu a conexão ("is not queryable", sem código), `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
+| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `25P03` (sessão ociosa encerrada no meio da transação), `57P01`–`57P03`, `57014` (query cancelada), classe `53` (servidor sem recurso: conexões esgotadas, memória, disco), `EHOSTUNREACH`, `ENETUNREACH`, timeout de conexão do pool, cliente do `pg` que perdeu a conexão ("is not queryable", sem código), `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
 | qualquer outro | 500, porque é defeito, não condição de negócio |
+
+**Recurso esgotado e query cancelada também passam.** `53300` (conexões
+esgotadas no servidor), o resto da classe `53` e `57014` (query cancelada por
+`statement_timeout` ou pelo operador) desfazem a transação inteira, e repetir
+é seguro. Antes, eles viravam 500 na HTTP e, na fila, transformavam uma aposta
+válida em `FAILED` permanente, até as revisões do projeto mostrarem o caso. O
+teste cancela no servidor uma aposta que espera o lock da wallet e confere 503
+sem nada gravado. `25006` e `08P01` continuam 500: aqui o primeiro só nasce de
+escrita dentro do `snapshot` de leitura, e o segundo é violação de protocolo;
+repetir não muda nenhum dos dois.
 
 **Conflitos de lock são contados antes da tradução.** O `55P03` (lock não
 obtido), o `40P01` (deadlock) e o `40001` (serialização) incrementam
@@ -484,8 +494,10 @@ métricas se isso mudar. Timeout e deadlock reais têm teste.
 200) chega ao `pg.Pool`. Sem ele valia o padrão do driver, 10, e com dez
 leitores da fila ocupados a outbox e o resolver recebiam
 `timeout exceeded when trying to connect` em 1 s, porque o
-`connectionTimeoutMillis` também limita a fila de espera do pool. A
-configuração recusa `CONSUMER_CONCURRENCY + 3 > DATABASE_POOL_MAX`: cada leitor
+`connectionTimeoutMillis` também limita a fila de espera do pool. O worker
+recusa subir com `CONSUMER_CONCURRENCY + 3 > DATABASE_POOL_MAX`; a API, que não
+consome a fila, sobe com qualquer pool válido. Antes a regra valia para os dois
+processos, e uma API com pool menor que 13 não subia. Cada leitor
 segura no máximo uma conexão, e outbox, resolver e readiness rodam em sequência,
 uma conexão cada. O padrão 15 é o que o worker precisa (10 + 3) mais folga de
 2. Medimos o pico na suíte inteira: 42 conexões com pool 10, 82 com pool 20 e
@@ -536,7 +548,10 @@ O extrato usa paginação por chave sobre `wallet_version`, em ordem decrescente
 apoiada pelo índice único `(wallet_id, wallet_version)`. A próxima página busca
 versões estritamente menores que a última devolvida. Consultar `limit + 1`
 permite informar o fim sem contar todos os lançamentos. Novos lançamentos não
-deslocam as páginas já percorridas, como aconteceria com `OFFSET`.
+deslocam as páginas já percorridas, como aconteceria com `OFFSET`. O extrato lê
+a wallet e a página no mesmo `snapshot` de leitura, assim como as consultas de
+wallet e de transação por id e por id externo: só leitura, sem segurar uma
+transação de escrita.
 
 O cursor pertence ao transporte HTTP: base64url de
 `{"v":1,"walletVersion":<n>}`. O caso de uso recebe apenas a versão. A leitura
@@ -605,7 +620,8 @@ A mesma chave enviada para wallets diferentes não compartilha lock. O índice
 único resolve a disputa: o perdedor recebe `23505`, o caso de uso refaz a
 tentativa uma vez com um candidato novo, encontra a transação do vencedor e
 responde conforme o payload. O mesmo `externalTransactionId` com outra chave
-é `EXTERNAL_TRANSACTION_CONFLICT` (409).
+é `EXTERNAL_TRANSACTION_CONFLICT` (409), a menos que a transação gravada com
+ele seja `FAILED` (seção 11).
 
 `lock_timeout` de 2 s limita a espera pelo lock. Estourado, o PostgreSQL
 devolve `55P03`, que vira `503` com `Retry-After`, sem efeito: o cliente
@@ -659,7 +675,11 @@ saldo atual, porque responde ao pedido original.
   protege índices e logs, e quem passa dele recebe `400`. O mesmo contrato
   recusa o caractere NUL, que o `text` do PostgreSQL não grava: antes ele
   chegava ao banco e virava 500. Na fila, a mensagem vai para a DLQ com
-  `MESSAGE_INVALID`.
+  `MESSAGE_INVALID`. Recusa também U+FFFE e U+FFFF: o `JSON.stringify` não
+  os escapa, e o SQS não os aceita no corpo da mensagem. Um evento com eles
+  falharia a publicação para sempre e seguraria os eventos seguintes da wallet.
+  O LocalStack aceita os dois, então a prova fica no contrato, que também
+  confere que controle, surrogate solto, U+FFFD e U+10FFFF continuam aceitos.
 
 O consumo da fila `wager-transactions.fifo` usa este mesmo caso de uso, com
 a inbox na mesma transação (seção 11).
@@ -762,7 +782,12 @@ O backoff é `1s × 2^(attempts-1)`, sem jitter, com teto de cinco minutos.
 **Não há limite de tentativas nem descarte para DLQ:** um evento confirmado
 nunca é abandonado. O atraso deve ser acompanhado pelo lag e resolvido pela
 operação. O intervalo entre ciclos vem de `OUTBOX_POLL_INTERVAL_MS`, padrão
-500 ms, inteiro positivo dentro da faixa suportada pelo timer do runtime.
+500 ms, inteiro positivo dentro da faixa suportada pelo timer do runtime. Um
+lote cheio (100 eventos tentados) busca o próximo na hora, sem esperar o
+intervalo: antes, o publicador ficava limitado a 100 eventos por intervalo, e
+sob carga o lag crescia sem limite. Não vira laço quente: um evento que falha
+ganha backoff e deixa de ser devido. O resolver de pendências segue a mesma
+regra.
 
 O envio ocorre depois do commit financeiro, mas antes do commit do lote da
 outbox. Se o processo morrer, o PostgreSQL aborta o lote e libera os locks.
@@ -815,11 +840,13 @@ não pode referenciar a si mesma (`REFERENCE_SELF`, 400, e
 `wager_tx_reference_not_self_ck` no schema): ela ficaria esperando por ela
 própria. Player, wallet, moeda e rodada precisam coincidir. A busca já garante
 o mesmo provedor e o id externo; o trigger SQL confere de novo os dois.
-Referência terminal não processada (`REJECTED` ou `FAILED`) é recusada com
-`REFERENCE_NOT_PROCESSED`; referência inexistente ou ainda `PENDING_REFERENCE`
-deixa a operação pendente. Antes da seção 11, só `REJECTED` era recusada, e uma
-reversão de um `FAILED` ficaria pendente para sempre, porque o TTL só expira
-referência ausente.
+Referência `REJECTED` é recusada com `REFERENCE_NOT_PROCESSED`; referência
+inexistente ou ainda `PENDING_REFERENCE` deixa a operação pendente. Uma
+referência que só tem `FAILED` conta como inexistente: o provedor pode reenviá-la
+com o mesmo id externo (seção 11), e a reversão espera esse reenvio ou expira no
+TTL com `REFERENCE_NOT_FOUND`. Recusá-la seria impedir o jogo de desfazer a
+transação reenviada, e tratá-la como existente a deixaria pendente para sempre,
+porque o TTL só expira referência ausente.
 Somente `PROCESSED` pode ser aplicada. `OPENING` nunca serve como referência.
 
 A referência externa é obrigatória em `REFUND`/`ROLLBACK` e opcional em `WIN`.
@@ -939,7 +966,10 @@ Não representa um SLA medido dos provedores; deve ser ajustado à integração.
 `1s × 2^(attempts-1)` com teto de cinco minutos. A pendência nasce com contador zero e primeira consulta agendada em um segundo;
 cada retry incrementa o contador antes de calcular o backoff. Para referência
 ausente, o agendamento é limitado ao
-próprio deadline, para o backoff não adiar a expiração. Somente se a referência
+próprio deadline, para o backoff não adiar a expiração. O retry depois de uma
+falha transitória do resolver segue o mesmo teto enquanto o prazo está no
+futuro; depois dele, usa só o backoff, para não agendar no passado e repetir a
+cada ciclo. Somente se a referência
 continuar inexistente ao vencer o prazo ocorre `REFERENCE_NOT_FOUND` e evento
 rejeitado. Referência existente, ainda pendente, continua esperando além do TTL;
 referência existente processada continua podendo ser aplicada após esse prazo.
@@ -1037,9 +1067,14 @@ depois do commit. Um teste mata o worker com `SIGKILL` entre o commit e o
 | erro de contrato, conflito, recurso inexistente ou negócio lançado | DLQ com o `failureCode` | reenviar igual não muda nada |
 | erro interno | grava `FAILED` e manda para a DLQ com `PROCESSING_FAILED` | permanente, auditável (§6.3) |
 
-O limite de tentativas é a `RedrivePolicy` da fila, `maxReceiveCount` 5, com
+O limite de tentativas é a `RedrivePolicy` da fila, `maxReceiveCount` 10, com
 visibilidade de 30 s, criada pelo hook do LocalStack e conferida no teste de
-contrato SQS. Um transitório persistente chega à DLQ pelo redrive do SQS, sem o
+contrato SQS. A janela de retry é a soma dos atrasos até o redrive: com a base
+padrão de 2 s, 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 300 + 300 = 1.110 s,
+cerca de 18 minutos de queda absorvidos antes da DLQ. Com 5 recebimentos, a
+janela era de 62 s: uma queda de um minuto mandava toda aposta em voo para a
+DLQ, até as revisões do projeto mostrarem a conta. O teste de contrato confere
+a janela, não o número, com o mesmo backoff do worker. Um transitório persistente chega à DLQ pelo redrive do SQS, sem o
 atributo `failureCode`. A DLQ explícita reaproveita o `MessageGroupId` e usa o
 `MessageId` do SQS como `MessageDeduplicationId`: uma mensagem com JSON
 inválido não tem `messageId` de negócio, e o id do SQS é estável entre
@@ -1063,7 +1098,20 @@ transação fica auditável pela linha, pelo atributo da DLQ, pelo log
 É terminal. Reprocessar a mensagem da DLQ depois de corrigir a causa não muda
 nada: a inbox já marcou a entrega, e a mesma chave responde com o `FAILED`
 gravado, tanto pela fila quanto pela HTTP (500). Para tentar de novo, o
-provedor usa outra chave. Se, numa corrida, a chave já tiver um desfecho
+provedor usa outra chave com o mesmo `externalTransactionId`. O índice
+`wager_tx_external_uk` é parcial (`status <> 'FAILED'`): o `FAILED` fica
+gravado para auditoria, mas não reserva o id externo, e o reenvio aplica a
+transação uma vez. Dois desfechos vivos com o mesmo id externo continuam
+impossíveis. A consulta por id externo devolve o desfecho vivo e, sem ele, o
+`FAILED` mais recente, numa consulta só, servida pelo índice comum
+`wager_tx_external_idx`. O índice parcial não serve uma busca sem o filtro de
+status: sem o comum, a referência ainda ausente percorria todas as transações
+do provedor com a wallet travada, até a terceira revisão do projeto mostrar o
+plano. Antes, o `FAILED` reservava o id para sempre: o reenvio
+recebia 409 e um WIN que falhou nunca era pago com o id original, até as
+revisões do projeto mostrarem o caso. Reverter a migration recusa enquanto
+houver `FAILED` repetindo um id externo, porque voltar exigiria apagar
+auditoria. Se, numa corrida, a chave já tiver um desfecho
 gravado por outra entrega, o `FAILED` não é gravado e a mensagem vai para a
 DLQ do mesmo jeito; preferimos uma DLQ visível a confirmar uma entrega que
 falhou.
@@ -1115,6 +1163,11 @@ OpenTelemetry e dashboard são opcionais no enunciado e não foram feitos.
 | `wager_message_processing_seconds{outcome}` | histograma | worker | latência do consumo |
 | `outbox_published_total`, `outbox_publish_failures_total`, `pending_reference_transactions`, `pending_reference_resolved_total`, `wallet_reconciliation_divergences_total` | vários | ver seções 7, 9 e 10 | |
 
+- **Leitura de gauge não desfaz o ciclo.** O lag da outbox e a contagem de
+  pendências são lidos depois do commit do lote. Se a leitura falha, o lote
+  continua contado e o worker loga `outbox_lag_unavailable` ou
+  `pending_reference_count_unavailable`; o valor anterior fica até o próximo
+  ciclo. Antes, a falha dessa leitura aparecia como falha do ciclo inteiro.
 - **Mensagens contam depois que o SQS confirma.** O desfecho de uma mensagem
   (processada, duplicata, retry ou DLQ) só entra nas métricas quando o
   `DeleteMessage`, o `ChangeMessageVisibility` ou o envio à DLQ dá certo. Se o
@@ -1209,11 +1262,12 @@ indicada.
 
 | Escolha | Custo | Seção |
 |---|---|---|
-| Lock pessimista por wallet | a hot wallet é serial: 61 a 76 op/s no teste de carga; acima da capacidade, 503 rápido com `Retry-After`, sem efeito | 6, `docs/load-test.md` |
-| Uma mensagem por `ReceiveMessage` | duas idas ao SQS por mensagem; a fila fez 104 a 129 mensagens/s contra 280 a 400 op/s da HTTP no mesmo ambiente | 11 |
+| Lock pessimista por wallet | a hot wallet é serial: 40 a 87 op/s no teste de carga; acima da capacidade, 503 rápido com `Retry-After`, sem efeito | 6, `docs/load-test.md` |
+| Uma mensagem por `ReceiveMessage` | duas idas ao SQS por mensagem; a fila fez 99 a 113 mensagens/s contra 232 a 347 op/s da HTTP no mesmo ambiente | 11 |
 | Contrato estrito na fila | um campo novo do produtor vai para a DLQ até o contrato mudar | 11 |
-| `FAILED` terminal | reprocessar da DLQ não reaplica; o provedor reenvia com outra chave | 11 |
-| Outbox at-least-once, sem limite de tentativas | sob carga o lag chegou a 21 s e zerou depois; o consumidor de eventos deduplica por `eventId` | 9 |
+| `FAILED` terminal | reprocessar da DLQ não reaplica; o provedor reenvia com outra chave e o mesmo id externo | 11 |
+| Outbox at-least-once, sem limite de tentativas | sob carga o lag chegou a 11 s e zerou depois; o consumidor de eventos deduplica por `eventId` | 9 |
+| Publicador sem pausa com lote cheio | o lag caiu pela metade, mas a consulta do lote disputa CPU do PostgreSQL e a hot wallet perdeu vazão (média de 63 contra 81 op/s, com 503 ocasional) no teste de carga | 9, `docs/load-test.md` |
 | Camadas, portas e factories | mais arquivos por operação; em troca, fronteiras impostas pelo lint e casos de uso testáveis sem infraestrutura | 1 |
 
 **Limitações conhecidas**
@@ -1234,6 +1288,10 @@ indicada.
 - **Métricas por processo.** Contadores reiniciam com o processo, e as gauges
   de pendências e de DLQ observam o total, não devem ser somadas entre
   instâncias (seções 10 e 12). `OPENING` fica fora de `wager_transactions_total`.
+- **Pendência que termina em `FAILED` não publica evento de fechamento.** Quem
+  consome eventos viu `WagerTransactionPendingReference` e não recebe o
+  desfecho, porque a lista do enunciado não tem evento de `FAILED` (seção 11).
+  O desfecho fica na consulta da transação e nas métricas.
 - **Teste de carga numa máquina só**, com SQS emulado: os números comparam
   cenários, não medem capacidade de produção (`docs/load-test.md`).
 - **Windows.** Os testes de `SIGTERM` só rodam em Linux, e fora de container o

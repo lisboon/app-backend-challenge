@@ -7,13 +7,14 @@ import {
 } from '@nestjs/common';
 import { Registry } from 'prom-client';
 
-import { DomainError } from '../../modules/@shared/domain/errors/domain.error';
-import { EventPublicationError } from '../../modules/@shared/domain/errors/infrastructure.errors';
 import type { PublishOutboxUseCaseInterface } from '../../modules/@shared/usecase/publish-outbox/publish-outbox.usecase.dto';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
+import { errorCodeOf } from '../observability/error-code';
 
 export const PUBLISH_OUTBOX = Symbol('PUBLISH_OUTBOX');
+
+const BATCH_SIZE = 100;
 
 @Injectable()
 export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
@@ -57,8 +58,10 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async run(): Promise<void> {
+    let full = false;
     try {
-      const result = await this.publisher.execute({ limit: 100 });
+      const result = await this.publisher.execute({ limit: BATCH_SIZE });
+      full = result.attempted >= BATCH_SIZE;
       if (result.attempted > 0) {
         this.logger.log({
           event: 'outbox_batch_completed',
@@ -68,18 +71,16 @@ export class OutboxWorker implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error({
         event: 'outbox_cycle_failed',
-        errorCode:
-          error instanceof EventPublicationError
-            ? error.code
-            : error instanceof DomainError
-              ? error.name
-              : 'Error',
+        errorCode: errorCodeOf(error),
       });
     }
     if (!this.stopping) {
-      this.timer = setTimeout(() => {
-        this.current = this.run();
-      }, this.config.outboxPollIntervalMs);
+      this.timer = setTimeout(
+        () => {
+          this.current = this.run();
+        },
+        full ? 0 : this.config.outboxPollIntervalMs,
+      );
     }
   }
 }

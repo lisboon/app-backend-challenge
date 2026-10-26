@@ -123,6 +123,7 @@ export function loadConfig(env: Env): AppConfig {
   };
 
   for (const [name, value] of [
+    ['WAGER_QUEUE_NAME', config.sqs.wagerQueueName],
     ['WAGER_DLQ_NAME', config.sqs.wagerDeadLetterQueueName],
     ['EVENTS_QUEUE_NAME', config.sqs.eventsQueueName],
   ] as const) {
@@ -131,19 +132,21 @@ export function loadConfig(env: Env): AppConfig {
     }
   }
 
-  if (
-    config.consumerConcurrency + NON_CONSUMER_CONNECTIONS >
-    config.databasePoolMax
-  ) {
-    problems.push(
-      `CONSUMER_CONCURRENCY deve deixar ${NON_CONSUMER_CONNECTIONS} conexões de DATABASE_POOL_MAX para outbox, pendências e readiness`,
-    );
-  }
-
   if (problems.length > 0) {
     throw new InvalidConfigError(problems);
   }
   return config;
+}
+
+export function assertWorkerConfig(config: AppConfig): void {
+  if (
+    config.consumerConcurrency + NON_CONSUMER_CONNECTIONS >
+    config.databasePoolMax
+  ) {
+    throw new InvalidConfigError([
+      `CONSUMER_CONCURRENCY deve deixar ${NON_CONSUMER_CONNECTIONS} conexões de DATABASE_POOL_MAX para outbox, pendências e readiness`,
+    ]);
+  }
 }
 
 function parseInteger(

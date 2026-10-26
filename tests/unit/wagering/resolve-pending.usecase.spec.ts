@@ -37,12 +37,16 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
   let gauge: number;
   let outcomes: string[];
   let errors: unknown[];
+  let countFailure: Error | undefined;
+  let gaugeFailures: unknown[];
   let trace: string[];
   let events: OutboxMessage[];
   let resolver: ResolvePendingWagerTransactionsUseCase;
   let wagerMonitor: RecordingWagerMonitor;
 
   beforeEach(() => {
+    countFailure = undefined;
+    gaugeFailures = [];
     now = new Date(at.getTime() + 1000);
     processingError = undefined;
     resolvedElsewhere = false;
@@ -90,8 +94,12 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
       },
       findReversals: async () => [],
       accelerateReferences: async () => undefined,
-      countPending: async () =>
-        transaction.status === 'PENDING_REFERENCE' ? 1 : 0,
+      countPending: async () => {
+        if (countFailure) {
+          throw countFailure;
+        }
+        return transaction.status === 'PENDING_REFERENCE' ? 1 : 0;
+      },
     };
     const wallets: WalletMovementGateway = {
       lock: async () => {
@@ -129,6 +137,9 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
       },
       failed: (_candidate, error) => {
         errors.push(error);
+      },
+      pendingUnavailable: (error) => {
+        gaugeFailures.push(error);
       },
     };
     const clock = { now: () => now };
@@ -252,6 +263,36 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     expect(outcomes).toHaveLength(0);
     expect(retries).toBe(1);
     expect(wagerMonitor.recordings).toEqual([]);
+  });
+
+  it('falha transitória perto do TTL agenda o retry no prazo, não depois dele', async () => {
+    reference = bet();
+    processingError = new InfrastructureUnavailableError('PostgreSQL');
+    now = new Date(at.getTime() + 3_599_500);
+    await resolver.execute({ limit: 10 });
+    expect(transaction.status).toBe('PENDING_REFERENCE');
+    expect(transaction.nextReferenceAttemptAt).toEqual(
+      new Date(at.getTime() + 3_600_000),
+    );
+  });
+
+  it('falha transitória depois do TTL usa o backoff, sem agendar no passado', async () => {
+    reference = bet();
+    processingError = new InfrastructureUnavailableError('PostgreSQL');
+    now = new Date(at.getTime() + 7_200_000);
+    await resolver.execute({ limit: 10 });
+    expect(transaction.status).toBe('PENDING_REFERENCE');
+    expect(transaction.nextReferenceAttemptAt).toEqual(
+      new Date(now.getTime() + 1_000),
+    );
+  });
+
+  it('lote resolvido continua contado quando a contagem de pendências falha depois', async () => {
+    reference = bet();
+    countFailure = new Error('banco caiu depois do commit');
+    expect(await resolver.execute({ limit: 10 })).toEqual({ attempted: 1 });
+    expect(transaction.status).toBe('PROCESSED');
+    expect(gaugeFailures).toEqual([countFailure]);
   });
 
   it('referência existente pode ser processada depois do TTL', async () => {

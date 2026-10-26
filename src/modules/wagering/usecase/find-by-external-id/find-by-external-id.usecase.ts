@@ -17,7 +17,7 @@ export class FindWagerTransactionByExternalIdUseCase implements FindWagerTransac
   async execute(
     input: FindWagerTransactionByExternalIdUseCaseInputDto,
   ): Promise<FindWagerTransactionByExternalIdUseCaseOutputDto> {
-    const transaction = await this.transactions.execute((trx) =>
+    const transaction = await this.transactions.snapshot((trx) =>
       this.wagers.findByExternalId(
         input.providerId,
         input.externalTransactionId,

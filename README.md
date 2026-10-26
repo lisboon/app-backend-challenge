@@ -191,7 +191,7 @@ O worker grava a mensagem na inbox na mesma transação do efeito e confirma a
 entrega só depois do commit. A mesma mensagem entregue de novo não repete o
 efeito. Rejeição de negócio é confirmada como desfecho; falha transitória volta
 para a fila com backoff; erro permanente vai para `wager-transactions-dlq.fifo`
-com o atributo `failureCode`; depois de 5 recebimentos, o redrive do SQS também
+com o atributo `failureCode`; depois de 10 recebimentos (~18 min de retries), o redrive do SQS também
 move para a DLQ. Os detalhes estão na
 [seção 11 da arquitetura](ARCHITECTURE.md#11-consumo-sqs-inbox-e-failed).
 
@@ -220,7 +220,7 @@ curl http://127.0.0.1:3001/metrics
 | `WAGER_QUEUE_NAME` e `WAGER_DLQ_NAME` | Obrigatórias; filas de entrada e DLQ, com nome FIFO |
 | `CONSUMER_CONCURRENCY` | `10`; de 1 a 100 leitores da fila por worker, cada um com uma mensagem por vez |
 | `CONSUMER_RETRY_BASE_SECONDS` | `2`; de 1 a 300, base do backoff da mensagem com falha transitória |
-| `DATABASE_POOL_MAX` | `15`; de 2 a 200 conexões por processo; precisa deixar 3 além de `CONSUMER_CONCURRENCY`, e a soma entre processos não pode passar do `max_connections` do PostgreSQL |
+| `DATABASE_POOL_MAX` | `15`; de 2 a 200 conexões por processo; no worker, precisa deixar 3 além de `CONSUMER_CONCURRENCY`, e a soma entre processos não pode passar do `max_connections` do PostgreSQL |
 | `EVENTS_QUEUE_NAME` | Obrigatória; `.env.example` usa `wallet-events.fifo`. Deve ser um nome FIFO; configura também o hook do LocalStack |
 | `OUTBOX_POLL_INTERVAL_MS` | `500`; inteiro de 1 a 2147483647, intervalo entre ciclos do publicador |
 | `PENDING_REFERENCE_TTL_SECONDS` | `3600`; prazo desde createdAt para rejeitar uma referência ainda inexistente; mesmo valor na API e no worker |
@@ -255,7 +255,7 @@ wallet. A entrega é at-least-once. Consumidores devem deduplicar por eventId,
 inclusive depois da janela de cinco minutos de deduplicação do SQS FIFO.
 
 Mensagens na DLQ, com o motivo no atributo `failureCode` (ausente quando foi o
-redrive do SQS, depois de 5 recebimentos):
+redrive do SQS, depois de 10 recebimentos):
 
 ```bash
 docker compose exec sqs sh -c 'queue_url=$(awslocal sqs get-queue-url --queue-name wager-transactions-dlq.fifo --query QueueUrl --output text); awslocal sqs receive-message --queue-url "$queue_url" --max-number-of-messages 10 --wait-time-seconds 2 --message-attribute-names All'
@@ -292,8 +292,9 @@ bun run test:load          # teste de carga, com 3 APIs e 2 workers
 ```
 
 O teste de carga sobe e derruba sozinho uma stack isolada (projeto
-`wager-load`, portas 3100–3102, 3201–3202 e 4700), roda os cenários e confere a
-reconciliação de toda wallet usada. Leva cerca de três minutos. Metodologia,
+`wager-load`, imagem `wagering-processor:load`, portas 3100–3102, 3201–3202 e
+4700), roda os cenários e confere a reconciliação de toda wallet usada. Leva de
+três a quatro minutos. Metodologia,
 números e interpretação estão em [`docs/load-test.md`](docs/load-test.md).
 
 ## Qualidade

@@ -1,13 +1,13 @@
 import { Logger } from '@nestjs/common';
 import { Counter, Gauge, Registry } from 'prom-client';
 
-import { DomainError } from '../../modules/@shared/domain/errors/domain.error';
 import type { WagerTransaction } from '../../modules/wagering/domain/wager-transaction.entity';
 import type {
   PendingReferenceMonitor,
   PendingReferenceOutcome,
 } from '../../modules/wagering/gateway/pending-reference-monitor.gateway';
 import type { PendingWagerTransaction } from '../../modules/wagering/gateway/wager-transaction.gateway';
+import { errorCodeOf } from './error-code';
 
 export class PrometheusPendingReferenceMonitor implements PendingReferenceMonitor {
   private readonly logger = new Logger(PrometheusPendingReferenceMonitor.name);
@@ -65,12 +65,14 @@ export class PrometheusPendingReferenceMonitor implements PendingReferenceMonito
     this.logger.error({
       event: 'pending_reference_failed',
       ...logContext(candidate),
-      errorCode:
-        error instanceof DomainError
-          ? error.name
-          : error instanceof Error
-            ? error.constructor.name
-            : 'UnknownError',
+      errorCode: errorCodeOf(error),
+    });
+  }
+
+  pendingUnavailable(error: unknown): void {
+    this.logger.warn({
+      event: 'pending_reference_count_unavailable',
+      errorCode: errorCodeOf(error),
     });
   }
 }

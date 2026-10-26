@@ -5,6 +5,8 @@ import { Migration20261024000004OutboxOrdering } from './Migration20261024000004
 import { Migration20261025000005WagerReversals } from './Migration20261025000005WagerReversals';
 import { Migration20261025000006Inbox } from './Migration20261025000006Inbox';
 import { Migration20261025000007FailedTransitions } from './Migration20261025000007FailedTransitions';
+import { Migration20261026000008FailedReleasesExternalId } from './Migration20261026000008FailedReleasesExternalId';
+import { Migration20261026000009ExternalIdLookup } from './Migration20261026000009ExternalIdLookup';
 
 export const MIGRATIONS = [
   {
@@ -34,5 +36,13 @@ export const MIGRATIONS = [
   {
     name: 'Migration20261025000007FailedTransitions',
     class: Migration20261025000007FailedTransitions,
+  },
+  {
+    name: 'Migration20261026000008FailedReleasesExternalId',
+    class: Migration20261026000008FailedReleasesExternalId,
+  },
+  {
+    name: 'Migration20261026000009ExternalIdLookup',
+    class: Migration20261026000009ExternalIdLookup,
   },
 ];

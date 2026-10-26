@@ -13,7 +13,11 @@ import {
   SQSClient,
 } from '@aws-sdk/client-sqs';
 
+import { exponentialBackoff } from '../../src/modules/@shared/domain/backoff';
 import { testInfra, WAGER_QUEUE_NAME } from '../support/http-app';
+
+const DEFAULT_RETRY_BASE_MS = 2_000;
+const MIN_OUTAGE_COVERED_MS = 15 * 60_000;
 
 const TIMEOUT_MS = 20_000;
 
@@ -121,7 +125,7 @@ describe('filas provisionadas pelo hook do LocalStack', () => {
     expect(Attributes!.ContentBasedDeduplication).toBe('false');
   });
 
-  it('a fila principal é FIFO e redireciona para a DLQ FIFO após 5 recebimentos', async () => {
+  it('a fila principal é FIFO e só redireciona para a DLQ depois de 15 minutos de retries', async () => {
     const { QueueUrl } = await sqs.send(
       new GetQueueUrlCommand({ QueueName: WAGER_QUEUE_NAME }),
     );
@@ -132,7 +136,11 @@ describe('filas provisionadas pelo hook do LocalStack', () => {
 
     expect(Attributes!.FifoQueue).toBe('true');
     expect(Attributes!.ContentBasedDeduplication).toBe('false');
-    expect(Number(redrive.maxReceiveCount)).toBe(5);
+    const retryWindowMs = Array.from(
+      { length: Number(redrive.maxReceiveCount) },
+      (_, index) => exponentialBackoff(index + 1, DEFAULT_RETRY_BASE_MS),
+    ).reduce((total, delay) => total + delay, 0);
+    expect(retryWindowMs).toBeGreaterThanOrEqual(MIN_OUTAGE_COVERED_MS);
     expect(redrive.deadLetterTargetArn).toEndWith(
       ':wager-transactions-dlq.fifo',
     );

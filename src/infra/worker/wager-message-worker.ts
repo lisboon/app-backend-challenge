@@ -16,12 +16,13 @@ import type { InboxDelivery } from '../../modules/@shared/domain/inbox/inbox-mes
 import { payloadHash } from '../../modules/@shared/domain/payload-hash';
 import type { RecordFailedWagerTransactionUseCaseInterface } from '../../modules/wagering/usecase/record-failure/record-failure.usecase.dto';
 import type { SubmitWagerTransactionUseCaseInterface } from '../../modules/wagering/usecase/submit/submit.usecase.dto';
-import type { AppConfig } from '../config/app-config';
+import { type AppConfig, assertWorkerConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
 import {
   wagerTransactionMessageContract,
   type WagerTransactionMessage,
 } from '../contract/wager-transaction.contract';
+import { errorCodeOf } from '../observability/error-code';
 import type { ReceivedWagerMessage, WagerQueue } from '../queue/wager-queue';
 import {
   dispositionOfFailure,
@@ -85,7 +86,9 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
     @Inject(WAGER_CONSUMER_MONITOR)
     private readonly monitor: WagerConsumerMonitor,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
-  ) {}
+  ) {
+    assertWorkerConfig(config);
+  }
 
   onModuleInit(): void {
     this.current = this.run();
@@ -265,9 +268,4 @@ function parseMessage(body: string): WagerTransactionMessage | undefined {
   } catch {
     return undefined;
   }
-}
-
-function errorCodeOf(error: unknown): string {
-  const failure = error as { name?: string; code?: string; Code?: string };
-  return failure?.Code ?? failure?.code ?? failure?.name ?? 'Error';
 }

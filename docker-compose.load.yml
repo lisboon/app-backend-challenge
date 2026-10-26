@@ -5,8 +5,13 @@ services:
   sqs:
     ports: !override ["127.0.0.1:4700:4566"]
 
+  migrate:
+    image: wagering-processor:load
+
   api:
+    image: wagering-processor:load
     ports: !override ["127.0.0.1:3100-3102:3000"]
 
   worker:
+    image: wagering-processor:load
     ports: !override ["127.0.0.1:3201-3202:3001"]

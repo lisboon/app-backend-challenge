@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  assertWorkerConfig,
   InvalidConfigError,
   loadConfig,
 } from '../../../src/infra/config/app-config';
@@ -82,34 +83,48 @@ describe('loadConfig', () => {
     ).toBe(40);
   });
 
-  it('aceita concorrência que deixa três conexões para os outros ciclos', () => {
+  it('a API sobe com pool menor que a concorrência do consumidor, que ela não usa', () => {
     expect(
-      loadConfig({
-        ...valid,
-        DATABASE_POOL_MAX: '15',
-        CONSUMER_CONCURRENCY: '12',
-      }).consumerConcurrency,
-    ).toBe(12);
+      loadConfig({ ...valid, DATABASE_POOL_MAX: '5' }).databasePoolMax,
+    ).toBe(5);
+  });
+
+  it.each([
+    ['WAGER_QUEUE_NAME', 'wager-transactions'],
+    ['WAGER_DLQ_NAME', 'dlq'],
+    ['EVENTS_QUEUE_NAME', 'wallet-events'],
+  ])('recusa %s que não é fila FIFO', (name, value) => {
+    expect(problemsOf({ ...valid, [name]: value })).toEqual([
+      `${name} deve ser nome de fila FIFO`,
+    ]);
+  });
+});
+
+describe('assertWorkerConfig', () => {
+  it('aceita concorrência que deixa três conexões para os outros ciclos', () => {
+    const config = loadConfig({
+      ...valid,
+      DATABASE_POOL_MAX: '15',
+      CONSUMER_CONCURRENCY: '12',
+    });
+    expect(() => assertWorkerConfig(config)).not.toThrow();
   });
 
   it('recusa concorrência que esgotaria o pool do banco', () => {
-    expect(
-      problemsOf({
-        ...valid,
-        DATABASE_POOL_MAX: '15',
-        CONSUMER_CONCURRENCY: '13',
-      }),
-    ).toEqual([
-      'CONSUMER_CONCURRENCY deve deixar 3 conexões de DATABASE_POOL_MAX para outbox, pendências e readiness',
-    ]);
+    const config = loadConfig({
+      ...valid,
+      DATABASE_POOL_MAX: '15',
+      CONSUMER_CONCURRENCY: '13',
+    });
+    expect(() => assertWorkerConfig(config)).toThrow(
+      new InvalidConfigError([
+        'CONSUMER_CONCURRENCY deve deixar 3 conexões de DATABASE_POOL_MAX para outbox, pendências e readiness',
+      ]),
+    );
   });
+});
 
-  it('recusa DLQ que não é fila FIFO', () => {
-    expect(problemsOf({ ...valid, WAGER_DLQ_NAME: 'dlq' })).toEqual([
-      'WAGER_DLQ_NAME deve ser nome de fila FIFO',
-    ]);
-  });
-
+describe('loadConfig, demais leituras', () => {
   it('lê a configuração completa', () => {
     expect(loadConfig(valid)).toEqual({
       port: 3000,

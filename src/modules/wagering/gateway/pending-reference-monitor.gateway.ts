@@ -12,4 +12,5 @@ export interface PendingReferenceMonitor {
   ): void;
   retryScheduled(transaction: WagerTransaction): void;
   failed(candidate: PendingWagerTransaction, error: unknown): void;
+  pendingUnavailable(error: unknown): void;
 }

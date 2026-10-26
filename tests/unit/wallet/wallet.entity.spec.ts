@@ -129,7 +129,9 @@ describe('Wallet: movimentos', () => {
   it('débito maior que o saldo é invariante violada e não altera nada', () => {
     const { wallet } = open(brl('79.99'));
 
-    expect(() => wallet.debit(movement('80.00'))).toThrow(WalletInvariantError);
+    expect(() => wallet.debit(movement('80.00'))).toThrow(
+      new WalletInvariantError('débito maior que o saldo'),
+    );
     expect(wallet.balance.toString()).toBe('79.99');
     expect(wallet.version).toBe(1);
   });

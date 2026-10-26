@@ -4,9 +4,11 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 
 import { MikroOrmTransactionManager } from '../../src/infra/database/mikro-orm-transaction-manager';
 import { FailureCode } from '../../src/modules/@shared/domain/failure-code';
+import { Money } from '../../src/modules/@shared/domain/money';
 import { OutboxMessageRepository } from '../../src/modules/@shared/repository/outbox-message.repository';
 import { OpeningTransactionRepository } from '../../src/modules/wagering/repository/opening-transaction.repository';
 import { WagerTransactionRepository } from '../../src/modules/wagering/repository/wager-transaction.repository';
+import { WalletInvariantError } from '../../src/modules/wallet/domain/errors/wallet.errors';
 import { LedgerRepository } from '../../src/modules/wallet/repository/ledger.repository';
 import { WalletRepository } from '../../src/modules/wallet/repository/wallet.repository';
 import { CreateWalletUseCase } from '../../src/modules/wallet/usecase/create/create.usecase';
@@ -443,5 +445,35 @@ describe('wallets (integração HTTP com PostgreSQL real)', () => {
         failureCode: FailureCode.INFRASTRUCTURE_UNAVAILABLE,
       });
     });
+  });
+
+  it('gravar a wallet com versão desatualizada é recusado e não muda o saldo', async () => {
+    const response = await post({
+      playerId: uuid(),
+      initialBalance: brl('100.00'),
+    });
+    const { id } = (await response.json()) as WalletOutputDto;
+    const wallets = new WalletRepository();
+
+    const failure = await new MikroOrmTransactionManager(orm).execute(
+      async (trx) => {
+        const wallet = await wallets.findById(id, trx);
+        wallet!.credit({
+          entryId: uuid(),
+          transactionId: uuid(),
+          money: Money.from(brl('1.00')),
+          at: new Date(),
+        });
+        return wallets
+          .update(wallet!, wallet!.version, trx)
+          .catch((error: unknown) => error);
+      },
+    );
+
+    expect(failure).toBeInstanceOf(WalletInvariantError);
+    const after = (await (
+      await fetch(`${baseUrl}/wallets/${id}`)
+    ).json()) as WalletOutputDto;
+    expect(after).toMatchObject({ balance: brl('100.00'), version: 1 });
   });
 });

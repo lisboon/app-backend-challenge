@@ -45,10 +45,15 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
     for (const candidate of candidates) {
       attempted += await this.resolve(candidate);
     }
-    const pending = await this.transactions.snapshot((trx) =>
-      this.wagers.countPending(trx),
-    );
-    this.monitor.pending(pending);
+    try {
+      this.monitor.pending(
+        await this.transactions.snapshot((trx) =>
+          this.wagers.countPending(trx),
+        ),
+      );
+    } catch (error) {
+      this.monitor.pendingUnavailable(error);
+    }
     return { attempted };
   }
 
@@ -102,7 +107,7 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
         if (internal) {
           pending.fail(FailureCode.PROCESSING_FAILED, now);
         } else {
-          pending.scheduleReferenceRetry(now);
+          this.settlement.scheduleRetry(pending, now);
         }
         await this.wagers.update(pending, trx);
         return pending;

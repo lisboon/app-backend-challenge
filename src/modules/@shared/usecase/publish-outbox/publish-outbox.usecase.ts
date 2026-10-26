@@ -36,7 +36,11 @@ export class PublishOutboxUseCase implements PublishOutboxUseCaseInterface {
       );
       return this.publishDue(messages, trx);
     });
-    await this.recordLag();
+    try {
+      await this.recordLag();
+    } catch (error) {
+      this.monitor.lagUnavailable(error);
+    }
     return { attempted };
   }
 

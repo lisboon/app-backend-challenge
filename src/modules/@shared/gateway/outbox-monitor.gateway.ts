@@ -5,4 +5,5 @@ export interface OutboxMonitor {
   retryScheduled(message: OutboxMessage): void;
   publicationFailed(message: OutboxMessage, errorCode: string): void;
   lag(seconds: number): void;
+  lagUnavailable(error: unknown): void;
 }

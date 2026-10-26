@@ -2,13 +2,19 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 
 import { deferred } from './async';
 
-const WAITING_ON_LOCK =
-  "select pg_terminate_backend(pid) as dropped from pg_stat_activity where wait_event_type = 'Lock' and pid <> pg_backend_pid() and datname = current_database()";
+const INTERRUPT = {
+  terminate: 'pg_terminate_backend',
+  cancel: 'pg_cancel_backend',
+} as const;
+
+const waitingOnLock = (interrupt: keyof typeof INTERRUPT): string =>
+  `select ${INTERRUPT[interrupt]}(pid) as dropped from pg_stat_activity where wait_event_type = 'Lock' and pid <> pg_backend_pid() and datname = current_database()`;
 
 export async function dropConnectionsWaitingOn<T>(
   orm: MikroORM,
   table: string,
   start: () => Promise<T>,
+  interrupt: keyof typeof INTERRUPT = 'terminate',
 ): Promise<{ result: T; dropped: number }> {
   const locked = deferred();
   const release = deferred();
@@ -24,7 +30,7 @@ export async function dropConnectionsWaitingOn<T>(
   });
   let dropped = 0;
   while (!settled && dropped === 0) {
-    dropped = (await orm.em.fork().execute(WAITING_ON_LOCK)).length;
+    dropped = (await orm.em.fork().execute(waitingOnLock(interrupt))).length;
     if (dropped === 0) {
       await Bun.sleep(20);
     }

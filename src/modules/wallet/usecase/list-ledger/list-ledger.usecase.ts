@@ -18,7 +18,7 @@ export class ListWalletLedgerUseCase implements ListWalletLedgerUseCaseInterface
   execute(
     input: ListWalletLedgerUseCaseInputDto,
   ): Promise<ListWalletLedgerUseCaseOutputDto> {
-    return this.transactions.execute(async (trx) => {
+    return this.transactions.snapshot(async (trx) => {
       const wallet = await this.wallets.findById(input.walletId, trx);
       if (!wallet) {
         throw new WalletNotFoundError();
