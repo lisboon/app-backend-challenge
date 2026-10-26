@@ -23,6 +23,8 @@ const DUPLICATE_SHARE = 0.2;
 const OVERLOAD_CONCURRENCY = 150;
 const BET = { amount: '1.00', currency: 'BRL' };
 const BET_CENTS = 100n;
+const QUEUE_DRAIN_TIMEOUT_SECONDS = 300;
+const OUTBOX_DRAIN_TIMEOUT_SECONDS = 120;
 
 interface Wallet {
   walletId: string;
@@ -165,6 +167,7 @@ function watchOutboxLag(): { stop: () => Promise<number> } {
       await Bun.sleep(250);
     }
   })();
+  loop.catch(() => undefined);
   return {
     stop: async () => {
       running = false;
@@ -174,19 +177,34 @@ function watchOutboxLag(): { stop: () => Promise<number> } {
   };
 }
 
-async function waitOutboxDrained(): Promise<number> {
+async function until(
+  done: () => Promise<boolean>,
+  timeoutSeconds: number,
+  what: string,
+): Promise<number> {
   const startedAt = performance.now();
-  for (;;) {
-    const lags = await Promise.all(
-      WORKER_METRICS_URLS.map(async (url) =>
-        sampleValue(await scrape(url), 'outbox_lag_seconds'),
-      ),
-    );
-    if (lags.every((lag) => lag === 0)) {
-      return (performance.now() - startedAt) / 1000;
+  while (!(await done())) {
+    if (performance.now() - startedAt > timeoutSeconds * 1000) {
+      throw new Error(`${what} não terminou em ${timeoutSeconds} s`);
     }
-    await Bun.sleep(250);
+    await Bun.sleep(100);
   }
+  return (performance.now() - startedAt) / 1000;
+}
+
+function waitOutboxDrained(): Promise<number> {
+  return until(
+    async () =>
+      (
+        await Promise.all(
+          WORKER_METRICS_URLS.map(async (url) =>
+            sampleValue(await scrape(url), 'outbox_lag_seconds'),
+          ),
+        )
+      ).every((lag) => lag === 0),
+    OUTBOX_DRAIN_TIMEOUT_SECONDS,
+    'a drenagem da outbox',
+  );
 }
 
 async function httpScenario(
@@ -259,9 +277,11 @@ async function queueScenario(wallets: Wallet[]): Promise<ScenarioResult> {
       }),
     );
   }
-  while ((await processed()) - processedBefore < messages.length) {
-    await Bun.sleep(100);
-  }
+  await until(
+    async () => (await processed()) - processedBefore >= messages.length,
+    QUEUE_DRAIN_TIMEOUT_SECONDS,
+    'o consumo da fila',
+  );
   const seconds = (performance.now() - startedAt) / 1000;
   const outboxDrainSeconds = await waitOutboxDrained();
   return {
@@ -369,8 +389,8 @@ async function verify(
 }
 
 async function main(): Promise<void> {
-  await startStack();
   try {
+    await startStack();
     const warmup = await openWallet('1000.00');
     await inParallel(
       Array.from({ length: WARMUP_REQUESTS }, () => bet(warmup)),

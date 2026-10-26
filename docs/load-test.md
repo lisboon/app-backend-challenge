@@ -5,6 +5,11 @@ volume próprio), com **3 instâncias da API e 2 workers**, roda os cenários,
 confere saldo e ledger de toda wallet usada e derruba a stack. Não precisa de
 nada além do Docker e do Bun, e não toca no ambiente de desenvolvimento.
 
+A stack é derrubada também quando a subida falha no meio, e as esperas têm
+prazo: 300 s para os workers consumirem a fila e 120 s para a outbox zerar.
+Estourar um prazo encerra a execução com erro, em vez de deixar o processo
+preso.
+
 ## Ambiente
 
 | | |
