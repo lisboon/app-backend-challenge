@@ -983,3 +983,50 @@ Logs JSON, sem corpo de requisição, valor monetário, saldo ou URL de conexão
 Os testes conferem, na API real em processo separado, que toda linha do stdout
 é JSON e que o valor enviado não aparece; e que o log de transação tem
 exatamente os campos acima.
+
+## 13. Autenticação
+
+**Decisão: não integrar um Identity Provider agora.** O §2 diz que
+autenticação não vale pontos e não deve competir com correção financeira,
+concorrência e idempotência, e aceita não implementar desde que a decisão, o
+desenho e um ponto de extensão explícito estejam presentes. Se implementada, a
+expectativa é um IdP externo, nunca tabela própria de usuários com hash de
+senha nem token assinado pela aplicação.
+
+**Ponto de extensão no código.** Toda requisição HTTP passa pelo `AuthGuard`,
+registrado como `APP_GUARD`. O guard deixa passar o que tem `@Public()` e
+pergunta à `RequestAuthenticator` sobre o resto. Hoje a única implementação é
+a `AnonymousAuthenticator`, que autoriza tudo.
+
+- **Guard global com `@Public()`, e não `@UseGuards` por rota.** Uma rota nova
+  já nasce protegida; esquecer o decorator fecha uma rota, nunca abre. Só os
+  health checks são públicos, como o §2 manda. `/metrics` fica protegido: o
+  Prometheus envia bearer token no scrape quando o IdP existir, e a porta de
+  métricas do worker é interna.
+- **A porta existe para o guard ser testável.** Com um guard que devolvesse
+  `true` nos dois ramos, o `@Public()` não teria efeito observável e o ramo
+  seria código morto. O e2e troca o autenticador por um que recusa tudo e
+  prova que as rotas de negócio e `/metrics` respondem 403 antes do banco, que
+  os health checks não consultam o autenticador, e que, com o autenticador de
+  produção, a requisição chega ao caso de uso. As mutações "guard não global",
+  "health sem `@Public()`" e "guard ignora o metadado" derrubam esse teste.
+- **A recusa usa o 403 do Nest** (`canActivate` falso), com o envelope de erro
+  e `REQUEST_INVALID`. Os códigos `UNAUTHENTICATED` (401) e `PROVIDER_FORBIDDEN`
+  (403) nascem com o IdP, porque só ele os lança (seção 3).
+
+**Desenho que seria adotado:**
+
+1. Keycloak no compose, com um client confidencial por provedor e o fluxo
+   `client_credentials`: o provedor é uma máquina, não um usuário.
+2. Uma `JwksRequestAuthenticator` no lugar da anônima: valida assinatura,
+   `iss`, `aud` e `exp` contra o JWKS do realm, com cache das chaves, e
+   responde 401 sem token ou com token inválido.
+3. O `azp` do token vira o `providerId` autorizado. Uma transação cujo
+   `providerId` no corpo seja outro responde 403, antes do caso de uso.
+4. A fila continua como canal interno confiável (§2), e o `providerId` da
+   mensagem passa pelas mesmas validações de domínio de hoje, como o
+   `internal` reservado.
+
+O que muda para ligar: a implementação da `RequestAuthenticator`, a
+configuração do realm e o serviço do Keycloak no compose. Domínio, casos de
+uso e controllers não mudam.
