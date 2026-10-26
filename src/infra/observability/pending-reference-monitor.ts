@@ -7,7 +7,7 @@ import type {
   PendingReferenceOutcome,
 } from '../../modules/wagering/gateway/pending-reference-monitor.gateway';
 import type { PendingWagerTransaction } from '../../modules/wagering/gateway/wager-transaction.gateway';
-import { errorNameOf } from './error-name';
+import { errorCodeOf } from './error-code';
 
 export class PrometheusPendingReferenceMonitor implements PendingReferenceMonitor {
   private readonly logger = new Logger(PrometheusPendingReferenceMonitor.name);
@@ -65,14 +65,14 @@ export class PrometheusPendingReferenceMonitor implements PendingReferenceMonito
     this.logger.error({
       event: 'pending_reference_failed',
       ...logContext(candidate),
-      errorCode: errorNameOf(error),
+      errorCode: errorCodeOf(error),
     });
   }
 
   pendingUnavailable(error: unknown): void {
     this.logger.warn({
       event: 'pending_reference_count_unavailable',
-      errorCode: errorNameOf(error),
+      errorCode: errorCodeOf(error),
     });
   }
 }

@@ -1,6 +1,7 @@
 import { ConsoleLogger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 
+import { errorCodeOf } from '../observability/error-code';
 import { WorkerModule } from './worker.module';
 
 async function bootstrap(): Promise<void> {
@@ -15,7 +16,7 @@ async function bootstrap(): Promise<void> {
       (error: unknown) => {
         logger.error({
           event: 'worker_shutdown_failed',
-          errorCode: error instanceof Error ? error.name : 'UnknownError',
+          errorCode: errorCodeOf(error),
         });
         process.exit(1);
       },

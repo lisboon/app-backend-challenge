@@ -22,6 +22,7 @@ import {
   wagerTransactionMessageContract,
   type WagerTransactionMessage,
 } from '../contract/wager-transaction.contract';
+import { errorCodeOf } from '../observability/error-code';
 import type { ReceivedWagerMessage, WagerQueue } from '../queue/wager-queue';
 import {
   dispositionOfFailure,
@@ -267,9 +268,4 @@ function parseMessage(body: string): WagerTransactionMessage | undefined {
   } catch {
     return undefined;
   }
-}
-
-function errorCodeOf(error: unknown): string {
-  const failure = error as { name?: string; code?: string; Code?: string };
-  return failure?.Code ?? failure?.code ?? failure?.name ?? 'Error';
 }

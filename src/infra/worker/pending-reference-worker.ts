@@ -6,10 +6,10 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 
-import { DomainError } from '../../modules/@shared/domain/errors/domain.error';
 import type { ResolvePendingWagerTransactionsUseCaseInterface } from '../../modules/wagering/usecase/resolve-pending/resolve-pending.usecase.dto';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
+import { errorCodeOf } from '../observability/error-code';
 
 export const RESOLVE_PENDING_WAGER_TRANSACTIONS = Symbol(
   'RESOLVE_PENDING_WAGER_TRANSACTIONS',
@@ -58,7 +58,7 @@ export class PendingReferenceWorker implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.error({
         event: 'pending_reference_cycle_failed',
-        errorCode: error instanceof DomainError ? error.name : 'Error',
+        errorCode: errorCodeOf(error),
       });
     }
     if (!this.stopping) {
