@@ -18,6 +18,7 @@
     "test:cov": "bun test --coverage tests/unit",
     "test:e2e": "bun test tests/e2e",
     "test:integration": "bun test --timeout 30000 tests/integration",
+    "test:load": "bun tests/load/run.ts",
     "infra:test:up": "docker compose --profile test up -d --wait postgres-test sqs-test",
     "infra:test:down": "docker compose --profile test rm -sfv postgres-test sqs-test",
     "start:worker": "bun run src/infra/worker/main.ts"
