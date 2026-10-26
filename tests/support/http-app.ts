@@ -19,6 +19,7 @@ export interface TestInfra {
   wagerDeadLetterQueueName: string;
   eventsQueueName: string;
   pendingReferenceTtlSeconds?: number;
+  databasePoolMax?: number;
 }
 
 export function testInfra(): TestInfra {
@@ -47,7 +48,7 @@ export function testAppConfig(overrides: Partial<TestInfra> = {}): AppConfig {
     consumerRetryBaseSeconds: 1,
     consumerConcurrency: 10,
     databaseUrl: infra.databaseUrl,
-    databasePoolMax: DEFAULT_DATABASE_POOL_MAX,
+    databasePoolMax: infra.databasePoolMax ?? DEFAULT_DATABASE_POOL_MAX,
     sqs: {
       region: 'us-east-1',
       endpoint: infra.sqsEndpoint,

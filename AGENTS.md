@@ -144,6 +144,12 @@ Verificado por `bun run lint` (oxlint e `scripts/check-imports.ts`):
   nome dela.
 - Para cada comportamento crítico, faça uma mutação proposital, confirme que
   algum teste falha e desfaça. Liste as mutações no PR.
+- Falha de infraestrutura no meio do trabalho é caminho testado, não exceção.
+  Todo ponto de entrada novo (rota, ciclo de worker, consumidor) entra em
+  `tests/integration/connection-fault.integration.spec.ts`: a queda de conexão
+  dentro da transação responde como transitória (503 ou retry, nunca 500,
+  `FAILED` ou DLQ), não deixa efeito parcial e não consome recurso para sempre.
+  Depois das quedas, a operação volta a funcionar e o processo encerra.
 
 ## Rubrica
 
@@ -161,7 +167,8 @@ mais. A tabela vai preenchida na descrição do PR, com evidência para cada not
 | R7 | Documentação das decisões no `ARCHITECTURE.md` e no `README.md` | 5 |
 
 Teto: verificação vermelha limita a 70; qualquer falha eliminatória do
-`CHALLENGE.md` (seção 14) limita a 50.
+`CHALLENGE.md` (seção 14) limita a 50. R1 só passa de 20 com a matriz de falha
+de infraestrutura verde para todo ponto de entrada que o PR toca.
 
 ## Git e PR
 
