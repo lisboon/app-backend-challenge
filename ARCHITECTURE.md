@@ -1103,7 +1103,11 @@ provedor usa outra chave com o mesmo `externalTransactionId`. O índice
 gravado para auditoria, mas não reserva o id externo, e o reenvio aplica a
 transação uma vez. Dois desfechos vivos com o mesmo id externo continuam
 impossíveis. A consulta por id externo devolve o desfecho vivo e, sem ele, o
-`FAILED` mais recente. Antes, o `FAILED` reservava o id para sempre: o reenvio
+`FAILED` mais recente, numa consulta só, servida pelo índice comum
+`wager_tx_external_idx`. O índice parcial não serve uma busca sem o filtro de
+status: sem o comum, a referência ainda ausente percorria todas as transações
+do provedor com a wallet travada, até a terceira revisão do projeto mostrar o
+plano. Antes, o `FAILED` reservava o id para sempre: o reenvio
 recebia 409 e um WIN que falhou nunca era pago com o id original, até as
 revisões do projeto mostrarem o caso. Reverter a migration recusa enquanto
 houver `FAILED` repetindo um id externo, porque voltar exigiria apagar

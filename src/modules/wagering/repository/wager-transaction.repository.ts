@@ -147,18 +147,13 @@ export class WagerTransactionRepository implements WagerTransactionGateway {
     trx: TransactionContext,
   ): Promise<WagerTransaction | null> {
     const em = entityManagerOf(trx);
-    const row =
-      (await em.findOne(WagerTransactionModel, {
-        providerId,
-        externalTransactionId,
-        status: { $ne: 'FAILED' },
-      })) ??
-      (await em.findOne(
-        WagerTransactionModel,
-        { providerId, externalTransactionId },
-        { orderBy: { createdAt: 'desc' } },
-      ));
-    return row ? WagerTransactionModelMapper.toEntity(row) : null;
+    const [row] = await em.execute(
+      "select * from wager_transactions where provider_id=? and external_transaction_id=? order by status='FAILED', created_at desc limit 1",
+      [providerId, externalTransactionId],
+    );
+    return row
+      ? WagerTransactionModelMapper.toEntity(em.map(WagerTransactionModel, row))
+      : null;
   }
 
   private async findOne(

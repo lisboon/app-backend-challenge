@@ -1950,6 +1950,22 @@ describe('schema (integração com PostgreSQL real)', () => {
       resultCurrency: status === 'FAILED' ? null : 'BRL',
     });
 
+    it('a busca por id externo usa índice mesmo quando só há FAILED ou nada', async () => {
+      const plan = await inTransaction(async (em) => {
+        await em.execute('set local enable_seqscan = off');
+        return em.execute<{ 'QUERY PLAN': string }[]>(
+          "explain select * from wager_transactions where provider_id = ? and external_transaction_id = ? order by status = 'FAILED', created_at desc limit 1",
+          ['provider-a', uuid()],
+        );
+      });
+      const text = (plan as { 'QUERY PLAN': string }[])
+        .map((row) => row['QUERY PLAN'])
+        .join('\n');
+
+      expect(text).toContain('wager_tx_external_idx');
+      expect(text).not.toContain('Seq Scan');
+    });
+
     it('aceita FAILED e REJECTED com o mesmo id externo, mas não dois desfechos vivos', async () => {
       const opened = await openWallet('0.00');
       const externalTransactionId = uuid();
