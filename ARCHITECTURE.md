@@ -192,6 +192,13 @@ partir do 18 a imagem oficial guarda os dados em
 `/var/lib/postgresql/18/docker` e recusa subir quando há algo montado no caminho
 antigo, com volume ou com `tmpfs`.
 
+O healthcheck usa `pg_isready -h 127.0.0.1`, por TCP. Num volume novo, o
+`initdb` sobe um servidor temporário que escuta só no socket Unix e depois o
+desliga; um `pg_isready` pelo socket responde "pronto" nesse intervalo, e a
+migration, que conecta por TCP, recebia `ECONNREFUSED`. Medido dentro do
+container a cada 20 ms: 5 amostras com o socket pronto e o TCP recusado, antes
+do servidor definitivo.
+
 ### Imagem da API
 
 `oven/bun:1.4.2-alpine`, 185 MB. A Alpine foi a menor entre as bases do Bun
