@@ -1054,9 +1054,14 @@ depois do commit. Um teste mata o worker com `SIGKILL` entre o commit e o
 | erro de contrato, conflito, recurso inexistente ou negócio lançado | DLQ com o `failureCode` | reenviar igual não muda nada |
 | erro interno | grava `FAILED` e manda para a DLQ com `PROCESSING_FAILED` | permanente, auditável (§6.3) |
 
-O limite de tentativas é a `RedrivePolicy` da fila, `maxReceiveCount` 5, com
+O limite de tentativas é a `RedrivePolicy` da fila, `maxReceiveCount` 10, com
 visibilidade de 30 s, criada pelo hook do LocalStack e conferida no teste de
-contrato SQS. Um transitório persistente chega à DLQ pelo redrive do SQS, sem o
+contrato SQS. A janela de retry é a soma dos atrasos até o redrive: com a base
+padrão de 2 s, 2 + 4 + 8 + 16 + 32 + 64 + 128 + 256 + 300 + 300 = 1.110 s,
+cerca de 18 minutos de queda absorvidos antes da DLQ. Com 5 recebimentos, a
+janela era de 62 s: uma queda de um minuto mandava toda aposta em voo para a
+DLQ, até as revisões do projeto mostrarem a conta. O teste de contrato confere
+a janela, não o número, com o mesmo backoff do worker. Um transitório persistente chega à DLQ pelo redrive do SQS, sem o
 atributo `failureCode`. A DLQ explícita reaproveita o `MessageGroupId` e usa o
 `MessageId` do SQS como `MessageDeduplicationId`: uma mensagem com JSON
 inválido não tem `messageId` de negócio, e o id do SQS é estável entre

@@ -191,7 +191,7 @@ O worker grava a mensagem na inbox na mesma transação do efeito e confirma a
 entrega só depois do commit. A mesma mensagem entregue de novo não repete o
 efeito. Rejeição de negócio é confirmada como desfecho; falha transitória volta
 para a fila com backoff; erro permanente vai para `wager-transactions-dlq.fifo`
-com o atributo `failureCode`; depois de 5 recebimentos, o redrive do SQS também
+com o atributo `failureCode`; depois de 10 recebimentos (~18 min de retries), o redrive do SQS também
 move para a DLQ. Os detalhes estão na
 [seção 11 da arquitetura](ARCHITECTURE.md#11-consumo-sqs-inbox-e-failed).
 
@@ -255,7 +255,7 @@ wallet. A entrega é at-least-once. Consumidores devem deduplicar por eventId,
 inclusive depois da janela de cinco minutos de deduplicação do SQS FIFO.
 
 Mensagens na DLQ, com o motivo no atributo `failureCode` (ausente quando foi o
-redrive do SQS, depois de 5 recebimentos):
+redrive do SQS, depois de 10 recebimentos):
 
 ```bash
 docker compose exec sqs sh -c 'queue_url=$(awslocal sqs get-queue-url --queue-name wager-transactions-dlq.fifo --query QueueUrl --output text); awslocal sqs receive-message --queue-url "$queue_url" --max-number-of-messages 10 --wait-time-seconds 2 --message-attribute-names All'
