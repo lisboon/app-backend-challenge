@@ -47,13 +47,7 @@ export class WageringController {
       idempotencyKey: idempotencyKeyFrom(key),
       correlationId,
     });
-    response.status(
-      result.status === WagerTransactionStatus.Rejected
-        ? HttpStatus.UNPROCESSABLE_ENTITY
-        : result.status === WagerTransactionStatus.PendingReference
-          ? HttpStatus.ACCEPTED
-          : HttpStatus.CREATED,
-    );
+    response.status(httpStatusOf(result.status));
     return result;
   }
 
@@ -82,4 +76,17 @@ function idempotencyKeyFrom(header: string | undefined): string {
     throw new IdempotencyKeyMissingError();
   }
   return parseRequest(idempotencyKey, key);
+}
+
+function httpStatusOf(status: WagerTransactionStatus): HttpStatus {
+  switch (status) {
+    case WagerTransactionStatus.Rejected:
+      return HttpStatus.UNPROCESSABLE_ENTITY;
+    case WagerTransactionStatus.PendingReference:
+      return HttpStatus.ACCEPTED;
+    case WagerTransactionStatus.Failed:
+      return HttpStatus.INTERNAL_SERVER_ERROR;
+    default:
+      return HttpStatus.CREATED;
+  }
 }

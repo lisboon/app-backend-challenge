@@ -1,7 +1,8 @@
 import type { WagerTransaction } from '../domain/wager-transaction.entity';
 import type { PendingWagerTransaction } from './wager-transaction.gateway';
 
-export type PendingReferenceOutcome = 'processed' | 'rejected' | 'expired';
+export type PendingReferenceOutcome =
+  'processed' | 'rejected' | 'expired' | 'failed';
 
 export interface PendingReferenceMonitor {
   pending(count: number): void;

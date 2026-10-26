@@ -36,6 +36,7 @@ export const FailureCode = {
   INFRASTRUCTURE_UNAVAILABLE: 'INFRASTRUCTURE_UNAVAILABLE',
 
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  PROCESSING_FAILED: 'PROCESSING_FAILED',
 } as const;
 
 export type FailureCode = (typeof FailureCode)[keyof typeof FailureCode];
@@ -89,6 +90,7 @@ const KIND_BY_CODE: Readonly<Record<FailureCode, FailureKind>> = {
   [FailureCode.INFRASTRUCTURE_UNAVAILABLE]: FailureKind.TRANSIENT,
 
   [FailureCode.INTERNAL_ERROR]: FailureKind.INTERNAL,
+  [FailureCode.PROCESSING_FAILED]: FailureKind.INTERNAL,
 };
 
 export function failureKindOf(code: FailureCode): FailureKind {

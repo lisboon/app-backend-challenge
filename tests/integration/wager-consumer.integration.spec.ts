@@ -91,6 +91,7 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
     worker = new WagerMessageWorker(
       new WagerQueue(sqs, queues.sourceName, queues.deadLetterName),
       useCases.submitFor,
+      useCases.recordFailureFor,
       testAppConfig(),
     );
     worker.onModuleInit();
@@ -446,13 +447,14 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
     await invariant(wallet.walletId);
   });
 
-  it('falha interna depois da inbox desfaz inbox, transação, saldo e outbox juntos', async () => {
-    const wallet = await open();
-    const body = message(wallet);
+  const failInserts = async (
+    externalTransactionId: string,
+    condition: string,
+  ): Promise<() => Promise<void>> => {
     await orm.em.fork().execute(`
       create function consumer_test_fail() returns trigger language plpgsql as $$
       begin
-        if new.external_transaction_id = '${body.data.externalTransactionId}' then
+        if new.external_transaction_id = '${externalTransactionId}' and ${condition} then
           raise exception 'falha induzida pelo teste';
         end if;
         return new;
@@ -462,14 +464,98 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
       .execute(
         'create trigger consumer_test_fail before insert on wager_transactions for each row execute function consumer_test_fail()',
       );
+    return async () => {
+      await orm.em
+        .fork()
+        .execute('drop trigger consumer_test_fail on wager_transactions');
+      await orm.em.fork().execute('drop function consumer_test_fail()');
+    };
+  };
+
+  it('falha interna desfaz o efeito inteiro e grava FAILED auditável antes da DLQ', async () => {
+    const wallet = await open();
+    const body = message(wallet);
+    const restore = await failInserts(
+      body.data.externalTransactionId,
+      "new.status <> 'FAILED'",
+    );
     try {
       await send(body, wallet.walletId);
       startConsumer();
 
       await eventually(async () =>
         (await receiveDeadLetters(sqs, queues.deadLetterUrl)).some(
-          (letter) => letter.failureCode === FailureCode.INTERNAL_ERROR,
+          (letter) => letter.failureCode === FailureCode.PROCESSING_FAILED,
         ),
+      );
+      const recorded = await useCases.findByExternalId.execute({
+        providerId: body.data.providerId,
+        externalTransactionId: body.data.externalTransactionId,
+      });
+      expect(recorded).toMatchObject({
+        status: 'FAILED',
+        failureCode: FailureCode.PROCESSING_FAILED,
+        balance: null,
+      });
+      expect(
+        await count(
+          'select count(*) as n from wager_transactions where id = ? and correlation_id = ?',
+          [recorded.transactionId, body.messageId],
+        ),
+      ).toBe(1);
+      expect(await balanceOf(wallet.walletId)).toBe('100.00');
+      expect(
+        await count(
+          'select count(*) as n from inbox_messages where message_id = ? and processed_at is not null',
+          [body.messageId],
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          'select count(*) as n from outbox_messages where aggregate_id = ?',
+          [wallet.walletId],
+        ),
+      ).toBe(2);
+      expect(
+        await count(
+          'select count(*) as n from wallet_ledger_entries where transaction_id = ?',
+          [recorded.transactionId],
+        ),
+      ).toBe(0);
+      const replay = await fetch(`${baseUrl}/wagering/transactions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': body.data.idempotencyKey,
+        },
+        body: JSON.stringify({ ...body.data, idempotencyKey: undefined }),
+      });
+      expect(replay.status).toBe(500);
+      expect(await replay.json()).toMatchObject({
+        transactionId: recorded.transactionId,
+        status: 'FAILED',
+        failureCode: FailureCode.PROCESSING_FAILED,
+        idempotentReplay: true,
+      });
+    } finally {
+      await restore();
+    }
+  });
+
+  it('falha ao gravar FAILED devolve a mensagem para retry em vez de perder a auditoria', async () => {
+    const wallet = await open();
+    const body = message(wallet);
+    const restore = await failInserts(body.data.externalTransactionId, 'true');
+    try {
+      await send(body, wallet.walletId);
+      startConsumer();
+
+      await eventually(
+        async () =>
+          (await receiveDeadLetters(sqs, queues.deadLetterUrl)).some(
+            (letter) => letter.failureCode === undefined,
+          ),
+        40_000,
       );
       expect(await balanceOf(wallet.walletId)).toBe('100.00');
       expect(
@@ -480,15 +566,12 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
       ).toBe(0);
       expect(
         await count(
-          'select count(*) as n from outbox_messages where aggregate_id = ?',
-          [wallet.walletId],
+          'select count(*) as n from wager_transactions where external_transaction_id = ?',
+          [body.data.externalTransactionId],
         ),
-      ).toBe(2);
+      ).toBe(0);
     } finally {
-      await orm.em
-        .fork()
-        .execute('drop trigger consumer_test_fail on wager_transactions');
-      await orm.em.fork().execute('drop function consumer_test_fail()');
+      await restore();
     }
-  });
+  }, 60_000);
 });

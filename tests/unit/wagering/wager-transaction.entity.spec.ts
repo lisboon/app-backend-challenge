@@ -234,15 +234,14 @@ describe('WagerTransaction: referências e reversões', () => {
       FailureCode.REFERENCE_MISMATCH,
     );
   });
-  it('referência rejeitada não pode ser aplicada', () => {
-    expect(
-      reversal().rejectionFor(
-        wallet(),
-        reference({ status: WagerTransactionStatus.Rejected }),
-        [],
-      ),
-    ).toBe(FailureCode.REFERENCE_NOT_PROCESSED);
-  });
+  it.each([WagerTransactionStatus.Rejected, WagerTransactionStatus.Failed])(
+    'referência terminal %s não pode ser aplicada',
+    (status) => {
+      expect(reversal().rejectionFor(wallet(), reference({ status }), [])).toBe(
+        FailureCode.REFERENCE_NOT_PROCESSED,
+      );
+    },
+  );
   it('referência pendente ainda não decide valor nem saldo', () => {
     expect(
       reversal({
@@ -435,7 +434,8 @@ describe('WagerTransaction: referências e reversões', () => {
             to !== WagerTransactionStatus.Pending) ||
           (from === WagerTransactionStatus.PendingReference &&
             (to === WagerTransactionStatus.Processed ||
-              to === WagerTransactionStatus.Rejected));
+              to === WagerTransactionStatus.Rejected ||
+              to === WagerTransactionStatus.Failed));
         if (allowed) {
           expect(() =>
             assertWagerTransactionTransition(from, to),
@@ -632,12 +632,27 @@ describe('WagerTransaction: transições', () => {
     expect(transaction.resultBalance?.toString()).toBe('10.00');
   });
 
+  it('fail registra o código e a data sem saldo observado', () => {
+    const transaction = submitted();
+    transaction.fail(FailureCode.PROCESSING_FAILED, at);
+
+    expect(transaction.status).toBe(WagerTransactionStatus.Failed);
+    expect(transaction.failureCode).toBe(FailureCode.PROCESSING_FAILED);
+    expect(transaction.processedAt).toBe(at);
+    expect(transaction.resultBalance).toBeUndefined();
+    expect(transaction.isTerminal()).toBe(true);
+  });
+
   it.each([
     ['processada', (t: WagerTransaction) => t.markProcessed(brl('1.00'), at)],
     [
       'rejeitada',
       (t: WagerTransaction) =>
         t.reject(FailureCode.INSUFFICIENT_BALANCE, brl('1.00'), at),
+    ],
+    [
+      'falhada',
+      (t: WagerTransaction) => t.fail(FailureCode.PROCESSING_FAILED, at),
     ],
   ])('transação %s é terminal', (_caso, settle) => {
     const transaction = submitted();
@@ -649,6 +664,9 @@ describe('WagerTransaction: transições', () => {
     expect(() =>
       transaction.reject(FailureCode.INSUFFICIENT_BALANCE, brl('1.00'), at),
     ).toThrow(InvalidTransactionStateError);
+    expect(() => transaction.fail(FailureCode.PROCESSING_FAILED, at)).toThrow(
+      InvalidTransactionStateError,
+    );
   });
 
   it('a abertura nasce terminal', () => {

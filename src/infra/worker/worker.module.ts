@@ -34,6 +34,8 @@ import {
   RESOLVE_PENDING_WAGER_TRANSACTIONS,
 } from './pending-reference-worker';
 import {
+  RECORD_FAILURE_FOR_DELIVERY,
+  type RecordFailureForDelivery,
   SUBMIT_FOR_DELIVERY,
   type SubmitForDelivery,
   WAGER_QUEUE,
@@ -87,6 +89,12 @@ const WAGERING_USE_CASES = Symbol('WAGERING_USE_CASES');
       inject: [WAGERING_USE_CASES],
       useFactory: (useCases: WageringUseCases): SubmitForDelivery =>
         useCases.submitFor,
+    },
+    {
+      provide: RECORD_FAILURE_FOR_DELIVERY,
+      inject: [WAGERING_USE_CASES],
+      useFactory: (useCases: WageringUseCases): RecordFailureForDelivery =>
+        useCases.recordFailureFor,
     },
     {
       provide: WAGER_QUEUE,

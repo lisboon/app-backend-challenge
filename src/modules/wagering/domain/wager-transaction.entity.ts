@@ -29,6 +29,7 @@ export const WagerTransactionStatus = {
   PendingReference: 'PENDING_REFERENCE',
   Processed: 'PROCESSED',
   Rejected: 'REJECTED',
+  Failed: 'FAILED',
 } as const;
 
 export type WagerTransactionStatus =
@@ -51,13 +52,16 @@ const TRANSITIONS: Readonly<
     WagerTransactionStatus.Processed,
     WagerTransactionStatus.Rejected,
     WagerTransactionStatus.PendingReference,
+    WagerTransactionStatus.Failed,
   ],
   PENDING_REFERENCE: [
     WagerTransactionStatus.Processed,
     WagerTransactionStatus.Rejected,
+    WagerTransactionStatus.Failed,
   ],
   PROCESSED: [],
   REJECTED: [],
+  FAILED: [],
 };
 
 const ROLLBACK_TARGETS: readonly WagerTransactionKind[] = [
@@ -430,6 +434,10 @@ export class WagerTransaction {
     this.settle(WagerTransactionStatus.Rejected, code, resultBalance, at);
   }
 
+  fail(code: FailureCode, at: Date): void {
+    this.settle(WagerTransactionStatus.Failed, code, undefined, at);
+  }
+
   private walletRejection(wallet: TargetWallet): FailureCode | undefined {
     if (this.playerId !== wallet.playerId) {
       return FailureCode.WALLET_PLAYER_MISMATCH;
@@ -453,11 +461,10 @@ export class WagerTransaction {
     if (!this.sharesIdentityWith(reference)) {
       return FailureCode.REFERENCE_MISMATCH;
     }
-    if (reference.status === WagerTransactionStatus.Rejected) {
-      return FailureCode.REFERENCE_NOT_PROCESSED;
-    }
     if (reference.status !== WagerTransactionStatus.Processed) {
-      return undefined;
+      return reference.isTerminal()
+        ? FailureCode.REFERENCE_NOT_PROCESSED
+        : undefined;
     }
     return (
       this.reversalRejection(reference, reversals) ??
@@ -550,7 +557,7 @@ export class WagerTransaction {
   private settle(
     status: WagerTransactionStatus,
     code: FailureCode | undefined,
-    resultBalance: Money,
+    resultBalance: Money | undefined,
     at: Date,
   ): void {
     assertWagerTransactionTransition(this._status, status);

@@ -4,6 +4,7 @@ import { Migration20261024000003Outbox } from './Migration20261024000003Outbox';
 import { Migration20261024000004OutboxOrdering } from './Migration20261024000004OutboxOrdering';
 import { Migration20261025000005WagerReversals } from './Migration20261025000005WagerReversals';
 import { Migration20261025000006Inbox } from './Migration20261025000006Inbox';
+import { Migration20261025000007FailedTransitions } from './Migration20261025000007FailedTransitions';
 
 export const MIGRATIONS = [
   {
@@ -29,5 +30,9 @@ export const MIGRATIONS = [
   {
     name: 'Migration20261025000006Inbox',
     class: Migration20261025000006Inbox,
+  },
+  {
+    name: 'Migration20261025000007FailedTransitions',
+    class: Migration20261025000007FailedTransitions,
   },
 ];

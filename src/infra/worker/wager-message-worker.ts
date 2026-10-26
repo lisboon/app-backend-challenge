@@ -7,9 +7,14 @@ import {
 } from '@nestjs/common';
 
 import { exponentialBackoff } from '../../modules/@shared/domain/backoff';
-import { FailureCode } from '../../modules/@shared/domain/failure-code';
+import {
+  FailureCode,
+  FailureKind,
+  failureKindOf,
+} from '../../modules/@shared/domain/failure-code';
 import type { InboxDelivery } from '../../modules/@shared/domain/inbox/inbox-message.entity';
 import { payloadHash } from '../../modules/@shared/domain/payload-hash';
+import type { RecordFailedWagerTransactionUseCaseInterface } from '../../modules/wagering/usecase/record-failure/record-failure.usecase.dto';
 import type { SubmitWagerTransactionUseCaseInterface } from '../../modules/wagering/usecase/submit/submit.usecase.dto';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
@@ -26,6 +31,10 @@ import {
 export const WAGER_QUEUE = Symbol('WAGER_QUEUE');
 
 export const SUBMIT_FOR_DELIVERY = Symbol('SUBMIT_FOR_DELIVERY');
+
+export const RECORD_FAILURE_FOR_DELIVERY = Symbol(
+  'RECORD_FAILURE_FOR_DELIVERY',
+);
 
 export const WAGER_CONSUMER_NAME = 'wager-transactions';
 
@@ -47,6 +56,10 @@ export type SubmitForDelivery = (
   delivery: InboxDelivery,
 ) => SubmitWagerTransactionUseCaseInterface;
 
+export type RecordFailureForDelivery = (
+  delivery: InboxDelivery,
+) => RecordFailedWagerTransactionUseCaseInterface;
+
 @Injectable()
 export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WagerMessageWorker.name);
@@ -60,6 +73,8 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(WAGER_QUEUE) private readonly queue: WagerQueue,
     @Inject(SUBMIT_FOR_DELIVERY) private readonly submitFor: SubmitForDelivery,
+    @Inject(RECORD_FAILURE_FOR_DELIVERY)
+    private readonly recordFailureFor: RecordFailureForDelivery,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
@@ -144,7 +159,36 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
         transactionId: result.transactionId,
       };
     } catch (error) {
-      return { disposition: dispositionOfFailure(error) };
+      const disposition = dispositionOfFailure(error);
+      return isProcessingFailure(disposition)
+        ? this.recordFailure(delivery, message)
+        : { disposition };
+    }
+  }
+
+  private async recordFailure(
+    delivery: InboxDelivery,
+    message: WagerTransactionMessage,
+  ): Promise<Handled> {
+    try {
+      const { transactionId } = await this.recordFailureFor(delivery).execute({
+        ...message.data,
+        correlationId: message.messageId,
+      });
+      return {
+        disposition: {
+          action: 'dead-letter',
+          failureCode: FailureCode.PROCESSING_FAILED,
+        },
+        transactionId: transactionId ?? undefined,
+      };
+    } catch (error) {
+      const disposition = dispositionOfFailure(error);
+      return {
+        disposition: isProcessingFailure(disposition)
+          ? { action: 'retry' }
+          : disposition,
+      };
     }
   }
 
@@ -185,6 +229,13 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
       ) / 1000
     );
   }
+}
+
+function isProcessingFailure(disposition: MessageDisposition): boolean {
+  return (
+    disposition.action === 'dead-letter' &&
+    failureKindOf(disposition.failureCode) === FailureKind.INTERNAL
+  );
 }
 
 function parseMessage(body: string): WagerTransactionMessage | undefined {

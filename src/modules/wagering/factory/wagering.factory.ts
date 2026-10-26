@@ -12,6 +12,7 @@ import type { PendingReferenceMonitor } from '../gateway/pending-reference-monit
 import { WagerTransactionRepository } from '../repository/wager-transaction.repository';
 import { FindWagerTransactionByExternalIdUseCase } from '../usecase/find-by-external-id/find-by-external-id.usecase';
 import { FindWagerTransactionByIdUseCase } from '../usecase/find-by-id/find-by-id.usecase';
+import { RecordFailedWagerTransactionUseCase } from '../usecase/record-failure/record-failure.usecase';
 import { ResolvePendingWagerTransactionsUseCase } from '../usecase/resolve-pending/resolve-pending.usecase';
 import { SubmitWagerTransactionUseCase } from '../usecase/submit/submit.usecase';
 import { WagerTransactionSettlement } from '../usecase/wager-transaction-settlement';
@@ -27,6 +28,9 @@ export interface WageringFactoryDependencies {
 export interface WageringUseCases {
   submit: SubmitWagerTransactionUseCase;
   submitFor: (delivery: InboxDelivery) => SubmitWagerTransactionUseCase;
+  recordFailureFor: (
+    delivery: InboxDelivery,
+  ) => RecordFailedWagerTransactionUseCase;
   findById: FindWagerTransactionByIdUseCase;
   findByExternalId: FindWagerTransactionByExternalIdUseCase;
   resolvePending: ResolvePendingWagerTransactionsUseCase;
@@ -49,6 +53,13 @@ export const WageringFactory = {
       outbox,
     );
     const inbox = new InboxMessageRepository();
+    const inboxFor = (delivery: InboxDelivery): TransactionManager =>
+      new InboxTransactionManager(
+        dependencies.transactions,
+        inbox,
+        dependencies.clock,
+        delivery,
+      );
     const submitWith = (
       transactions: TransactionManager,
     ): SubmitWagerTransactionUseCase =>
@@ -70,14 +81,14 @@ export const WageringFactory = {
         dependencies.pendingMonitor,
       ),
       submit: submitWith(dependencies.transactions),
-      submitFor: (delivery) =>
-        submitWith(
-          new InboxTransactionManager(
-            dependencies.transactions,
-            inbox,
-            dependencies.clock,
-            delivery,
-          ),
+      submitFor: (delivery) => submitWith(inboxFor(delivery)),
+      recordFailureFor: (delivery) =>
+        new RecordFailedWagerTransactionUseCase(
+          inboxFor(delivery),
+          wagers,
+          wallets,
+          dependencies.ids,
+          dependencies.clock,
         ),
       findById: new FindWagerTransactionByIdUseCase(
         dependencies.transactions,

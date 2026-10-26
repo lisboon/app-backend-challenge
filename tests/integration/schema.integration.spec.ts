@@ -1276,7 +1276,7 @@ describe('schema (integração com PostgreSQL real)', () => {
       await invariant(opened.walletId);
     });
 
-    it('SQL cru permite pendência, retry sem transição e rejeição, mas não volta a PENDING nem avança para FAILED', async () => {
+    it('SQL cru permite pendência, retry sem transição e rejeição, mas não volta a PENDING', async () => {
       const opened = await openWallet('0.00');
       const id = await pending(opened, {
         status: 'PENDING',
@@ -1294,21 +1294,19 @@ describe('schema (integração com PostgreSQL real)', () => {
           [id],
         ),
       );
-      for (const status of ['PENDING', 'FAILED']) {
-        expect(
-          await failureOf(() =>
-            inTransaction((em) =>
-              em.execute('update wager_transactions set status=? where id=?', [
-                status,
-                id,
-              ]),
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "update wager_transactions set status='PENDING' where id=?",
+              [id],
             ),
           ),
-        ).toMatchObject({
-          code: '23514',
-          constraint: 'wager_transactions_protect',
-        });
-      }
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'wager_transactions_protect',
+      });
       await inTransaction((em) =>
         em.execute(
           "update wager_transactions set status='REJECTED',failure_code='REFERENCE_NOT_FOUND',result_balance=0,result_currency='BRL',next_reference_attempt_at=null,processed_at=now() where id=?",
@@ -1323,6 +1321,29 @@ describe('schema (integração com PostgreSQL real)', () => {
         );
       expect(saved).toEqual({ status: 'REJECTED', reference_attempts: 1 });
       await invariant(opened.walletId);
+    });
+
+    it('reverter a migration de FAILED volta a recusar PENDING_REFERENCE para FAILED', async () => {
+      const opened = await openWallet('0.00');
+      const before = await pending(opened);
+      const after = await pending(opened);
+      const fail = (id: string) =>
+        inTransaction((em) =>
+          em.execute(
+            "update wager_transactions set status='FAILED',failure_code='PROCESSING_FAILED',next_reference_attempt_at=null,processed_at=now() where id=?",
+            [id],
+          ),
+        );
+
+      await orm.migrator.down({ to: 'Migration20261025000006Inbox' });
+      const refused = await failureOf(() => fail(before));
+      await orm.migrator.up();
+
+      expect(refused).toMatchObject({
+        code: '23514',
+        constraint: 'wager_transactions_protect',
+      });
+      await fail(after);
     });
 
     it('lock de pendente ignora uma linha já travada sem depender do lock da wallet', async () => {
@@ -1487,21 +1508,45 @@ describe('schema (integração com PostgreSQL real)', () => {
         ).toMatchObject({ code: '23514', constraint: 'wallets_protect' });
       },
     );
-    it('SQL cru recusa transição de PENDING para FAILED', async () => {
+    it('SQL cru recusa FAILED com saldo observado', async () => {
       const { id } = await row();
       expect(
         await failureOf(() =>
           inTransaction((em) =>
             em.execute(
-              "update wager_transactions set status='FAILED',failure_code='TEST',processed_at=now() where id=?",
+              "update wager_transactions set status='FAILED',failure_code='TEST',result_balance=0,result_currency='BRL',processed_at=now() where id=?",
               [id],
             ),
           ),
         ),
-      ).toMatchObject({
-        code: '23514',
-        constraint: 'wager_transactions_protect',
-      });
+      ).toMatchObject({ code: '23514' });
+    });
+    it('SQL cru permite PENDING para FAILED e depois o trata como terminal', async () => {
+      const { id } = await row();
+      await inTransaction((em) =>
+        em.execute(
+          "update wager_transactions set status='FAILED',failure_code='TEST',processed_at=now() where id=?",
+          [id],
+        ),
+      );
+      for (const change of [
+        "status='PROCESSED',failure_code=null,result_balance=0,result_currency='BRL'",
+        "failure_code='OTHER'",
+      ]) {
+        expect(
+          await failureOf(() =>
+            inTransaction((em) =>
+              em.execute(
+                'update wager_transactions set ' + change + ' where id=?',
+                [id],
+              ),
+            ),
+          ),
+        ).toMatchObject({
+          code: '23514',
+          constraint: 'wager_transactions_protect',
+        });
+      }
     });
     it.each(['PROCESSED', 'REJECTED'])(
       'SQL cru permite PENDING para %s',

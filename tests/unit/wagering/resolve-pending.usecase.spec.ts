@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 
+import { InfrastructureUnavailableError } from '../../../src/modules/@shared/domain/errors/infrastructure.errors';
 import { FailureCode } from '../../../src/modules/@shared/domain/failure-code';
 import { Money } from '../../../src/modules/@shared/domain/money';
 import type { OutboxMessage } from '../../../src/modules/@shared/domain/outbox/outbox-message.entity';
@@ -221,17 +222,29 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     expect(outcomes).toEqual(['rejected']);
   });
 
-  it('erro inesperado com referência existente não vira REFERENCE_NOT_FOUND mesmo após TTL', async () => {
+  it('erro inesperado vira FAILED auditável, não REFERENCE_NOT_FOUND nem retry sem fim', async () => {
     reference = bet();
     now = new Date(at.getTime() + 3600000);
     processingError = new Error('falha inesperada');
     await resolver.execute({ limit: 10 });
+    expect(transaction.status).toBe('FAILED');
+    expect(transaction.failureCode).toBe(FailureCode.PROCESSING_FAILED);
+    expect(transaction.processedAt).toEqual(now);
+    expect(events).toHaveLength(0);
+    expect(moves).toBe(0);
+    expect(outcomes).toEqual(['failed']);
+    expect(errors).toEqual([processingError]);
+    expect(retries).toBe(0);
+  });
+
+  it('falha transitória mantém a pendência e agenda retry', async () => {
+    reference = bet();
+    processingError = new InfrastructureUnavailableError('PostgreSQL');
+    await resolver.execute({ limit: 10 });
     expect(transaction.status).toBe('PENDING_REFERENCE');
     expect(transaction.failureCode).toBeUndefined();
     expect(transaction.referenceAttempts).toBe(1);
-    expect(events).toHaveLength(0);
     expect(outcomes).toHaveLength(0);
-    expect(errors).toEqual([processingError]);
     expect(retries).toBe(1);
   });
 
