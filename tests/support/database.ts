@@ -1,10 +1,13 @@
 import { MikroORM } from '@mikro-orm/postgresql';
 
+import { DEFAULT_DATABASE_POOL_MAX } from '../../src/infra/config/app-config';
 import { ormConfig } from '../../src/infra/database/orm.config';
 import { testInfra } from './http-app';
 
 export async function openTestOrm(): Promise<MikroORM> {
-  return MikroORM.init(ormConfig(testInfra().databaseUrl));
+  return MikroORM.init(
+    ormConfig(testInfra().databaseUrl, DEFAULT_DATABASE_POOL_MAX),
+  );
 }
 
 export async function migrateFresh(orm: MikroORM): Promise<void> {

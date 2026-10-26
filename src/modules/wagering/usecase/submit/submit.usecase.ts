@@ -1,5 +1,4 @@
 import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
-import { Money } from '../../../@shared/domain/money';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
 import type { IdGenerator } from '../../../@shared/gateway/id-generator.gateway';
@@ -8,9 +7,11 @@ import {
   IdempotencyRaceError,
   ReferenceAlreadyReversedError,
 } from '../../domain/errors/wagering.errors';
-import { WagerTransaction } from '../../domain/wager-transaction.entity';
+import type { WagerTransaction } from '../../domain/wager-transaction.entity';
+import type { WagerTransactionMonitor } from '../../gateway/wager-transaction-monitor.gateway';
 import type { WagerTransactionGateway } from '../../gateway/wager-transaction.gateway';
 import type { WalletMovementGateway } from '../../gateway/wallet-movement.gateway';
+import { wagerTransactionCandidate } from '../wager-transaction-candidate';
 import type { WagerTransactionSettlement } from '../wager-transaction-settlement';
 import type {
   SubmitWagerTransactionUseCaseInputDto,
@@ -26,6 +27,7 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     private readonly settlement: WagerTransactionSettlement,
+    private readonly monitor: WagerTransactionMonitor,
   ) {}
 
   async execute(
@@ -44,52 +46,43 @@ export class SubmitWagerTransactionUseCase implements SubmitWagerTransactionUseC
     }
   }
 
-  private attempt(
+  private async attempt(
     input: SubmitWagerTransactionUseCaseInputDto,
   ): Promise<SubmitWagerTransactionUseCaseOutputDto> {
-    const candidate = WagerTransaction.create({
-      id: this.ids.next(),
-      providerId: input.providerId,
-      externalTransactionId: input.externalTransactionId,
-      idempotencyKey: input.idempotencyKey,
-      walletId: input.walletId,
-      playerId: input.playerId,
-      roundId: input.roundId,
-      gameId: input.gameId,
-      kind: input.kind,
-      money: Money.from(input.money),
-      at: this.clock.now(),
-      correlationId: input.correlationId,
-      referenceExternalTransactionId: input.referenceExternalTransactionId,
-    });
+    const candidate = wagerTransactionCandidate(
+      input,
+      this.ids.next(),
+      this.clock.now(),
+    );
 
-    return this.transactions.execute(async (trx) => {
-      const wallet = await this.wallets.lock(candidate.walletId, trx);
-      if (!wallet) {
-        throw new WalletNotFoundError();
-      }
-      const recorded = await this.wagers.findByIdempotencyKey(
-        candidate.providerId,
-        candidate.idempotencyKey,
-        trx,
-      );
-      if (recorded) {
-        return this.replay(recorded, candidate);
-      }
-      await this.settlement.apply(candidate, wallet, trx);
-      await this.wagers.create(candidate, trx);
-      return toOutput(candidate, false);
-    });
-  }
-
-  private replay(
-    recorded: WagerTransaction,
-    candidate: WagerTransaction,
-  ): SubmitWagerTransactionUseCaseOutputDto {
-    if (!recorded.matchesPayload(candidate.payloadHash)) {
-      throw new IdempotencyPayloadConflictError();
+    const { transaction, replay } = await this.transactions.execute(
+      async (trx) => {
+        const wallet = await this.wallets.lock(candidate.walletId, trx);
+        if (!wallet) {
+          throw new WalletNotFoundError();
+        }
+        const recorded = await this.wagers.findByIdempotencyKey(
+          candidate.providerId,
+          candidate.idempotencyKey,
+          trx,
+        );
+        if (recorded) {
+          if (!recorded.matchesPayload(candidate.payloadHash)) {
+            throw new IdempotencyPayloadConflictError();
+          }
+          return { transaction: recorded, replay: true };
+        }
+        await this.settlement.apply(candidate, wallet, trx);
+        await this.wagers.create(candidate, trx);
+        return { transaction: candidate, replay: false };
+      },
+    );
+    if (replay) {
+      this.monitor.replayed(transaction);
+    } else {
+      this.monitor.recorded(transaction);
     }
-    return toOutput(recorded, true);
+    return toOutput(transaction, replay);
   }
 }
 

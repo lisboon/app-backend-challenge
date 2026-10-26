@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 
+import { InfrastructureUnavailableError } from '../../../src/modules/@shared/domain/errors/infrastructure.errors';
 import { FailureCode } from '../../../src/modules/@shared/domain/failure-code';
 import { Money } from '../../../src/modules/@shared/domain/money';
 import type { OutboxMessage } from '../../../src/modules/@shared/domain/outbox/outbox-message.entity';
@@ -13,6 +14,7 @@ import type { WagerTransactionGateway } from '../../../src/modules/wagering/gate
 import type { WalletMovementGateway } from '../../../src/modules/wagering/gateway/wallet-movement.gateway';
 import { ResolvePendingWagerTransactionsUseCase } from '../../../src/modules/wagering/usecase/resolve-pending/resolve-pending.usecase';
 import { WagerTransactionSettlement } from '../../../src/modules/wagering/usecase/wager-transaction-settlement';
+import { RecordingWagerMonitor } from '../../support/wager-monitor';
 
 class FakeContext extends TransactionContext {
   constructor() {
@@ -38,6 +40,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
   let trace: string[];
   let events: OutboxMessage[];
   let resolver: ResolvePendingWagerTransactionsUseCase;
+  let wagerMonitor: RecordingWagerMonitor;
 
   beforeEach(() => {
     now = new Date(at.getTime() + 1000);
@@ -45,6 +48,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     resolvedElsewhere = false;
     returnedTerminal = false;
     moves = retries = gauge = 0;
+    wagerMonitor = new RecordingWagerMonitor();
     outcomes = [];
     errors = [];
     trace = [];
@@ -146,6 +150,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
       settlement,
       clock,
       monitor,
+      wagerMonitor,
     );
   });
 
@@ -221,18 +226,32 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     expect(outcomes).toEqual(['rejected']);
   });
 
-  it('erro inesperado com referência existente não vira REFERENCE_NOT_FOUND mesmo após TTL', async () => {
+  it('erro inesperado vira FAILED auditável, não REFERENCE_NOT_FOUND nem retry sem fim', async () => {
     reference = bet();
     now = new Date(at.getTime() + 3600000);
     processingError = new Error('falha inesperada');
     await resolver.execute({ limit: 10 });
+    expect(transaction.status).toBe('FAILED');
+    expect(transaction.failureCode).toBe(FailureCode.PROCESSING_FAILED);
+    expect(transaction.processedAt).toEqual(now);
+    expect(events).toHaveLength(0);
+    expect(moves).toBe(0);
+    expect(outcomes).toEqual(['failed']);
+    expect(errors).toEqual([processingError]);
+    expect(retries).toBe(0);
+    expect(wagerMonitor.recordings.map((r) => r.status)).toEqual(['FAILED']);
+  });
+
+  it('falha transitória mantém a pendência e agenda retry', async () => {
+    reference = bet();
+    processingError = new InfrastructureUnavailableError('PostgreSQL');
+    await resolver.execute({ limit: 10 });
     expect(transaction.status).toBe('PENDING_REFERENCE');
     expect(transaction.failureCode).toBeUndefined();
     expect(transaction.referenceAttempts).toBe(1);
-    expect(events).toHaveLength(0);
     expect(outcomes).toHaveLength(0);
-    expect(errors).toEqual([processingError]);
     expect(retries).toBe(1);
+    expect(wagerMonitor.recordings).toEqual([]);
   });
 
   it('referência existente pode ser processada depois do TTL', async () => {
@@ -241,6 +260,9 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     await resolver.execute({ limit: 10 });
     expect(transaction.status).toBe('PROCESSED');
     expect(outcomes).toEqual(['processed']);
+    expect(wagerMonitor.recordings).toEqual([
+      { status: 'PROCESSED', transactionId: transaction.id },
+    ]);
   });
 
   it('corrida em que outro worker resolveu antes do lock sai sem efeito', async () => {

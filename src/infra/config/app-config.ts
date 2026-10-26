@@ -4,11 +4,15 @@ export interface AppConfig {
   outboxPollIntervalMs: number;
   pendingReferencePollIntervalMs: number;
   pendingReferenceTtlSeconds: number;
+  consumerRetryBaseSeconds: number;
+  consumerConcurrency: number;
   databaseUrl: string;
+  databasePoolMax: number;
   sqs: {
     region: string;
     endpoint: string | undefined;
     wagerQueueName: string;
+    wagerDeadLetterQueueName: string;
     eventsQueueName: string;
   };
 }
@@ -25,6 +29,11 @@ type Env = Readonly<Record<string, string | undefined>>;
 const DEFAULT_PORT = 3000;
 const MAX_PORT = 65535;
 const POSTGRES_URL = /^postgres(ql)?:\/\//;
+const FIFO_QUEUE = /^[A-Za-z0-9_-]{1,75}\.fifo$/;
+
+export const DEFAULT_DATABASE_POOL_MAX = 15;
+
+const NON_CONSUMER_CONNECTIONS = 3;
 
 export function loadConfig(env: Env): AppConfig {
   const problems: string[] = [];
@@ -64,6 +73,14 @@ export function loadConfig(env: Env): AppConfig {
       problems,
     ),
     databaseUrl,
+    databasePoolMax: parseInteger(
+      env.DATABASE_POOL_MAX,
+      'DATABASE_POOL_MAX',
+      DEFAULT_DATABASE_POOL_MAX,
+      2,
+      200,
+      problems,
+    ),
     pendingReferencePollIntervalMs: parseInteger(
       env.PENDING_REFERENCE_POLL_INTERVAL_MS,
       'PENDING_REFERENCE_POLL_INTERVAL_MS',
@@ -80,19 +97,47 @@ export function loadConfig(env: Env): AppConfig {
       2_147_483_647,
       problems,
     ),
+    consumerRetryBaseSeconds: parseInteger(
+      env.CONSUMER_RETRY_BASE_SECONDS,
+      'CONSUMER_RETRY_BASE_SECONDS',
+      2,
+      1,
+      300,
+      problems,
+    ),
+    consumerConcurrency: parseInteger(
+      env.CONSUMER_CONCURRENCY,
+      'CONSUMER_CONCURRENCY',
+      10,
+      1,
+      100,
+      problems,
+    ),
     sqs: {
       region: required('AWS_REGION'),
       endpoint: env.SQS_ENDPOINT?.trim() || undefined,
       wagerQueueName: required('WAGER_QUEUE_NAME'),
+      wagerDeadLetterQueueName: required('WAGER_DLQ_NAME'),
       eventsQueueName: required('EVENTS_QUEUE_NAME'),
     },
   };
 
+  for (const [name, value] of [
+    ['WAGER_DLQ_NAME', config.sqs.wagerDeadLetterQueueName],
+    ['EVENTS_QUEUE_NAME', config.sqs.eventsQueueName],
+  ] as const) {
+    if (value && !FIFO_QUEUE.test(value)) {
+      problems.push(`${name} deve ser nome de fila FIFO`);
+    }
+  }
+
   if (
-    config.sqs.eventsQueueName &&
-    !/^[A-Za-z0-9_-]{1,75}\.fifo$/.test(config.sqs.eventsQueueName)
+    config.consumerConcurrency + NON_CONSUMER_CONNECTIONS >
+    config.databasePoolMax
   ) {
-    problems.push('EVENTS_QUEUE_NAME deve ser nome de fila FIFO');
+    problems.push(
+      `CONSUMER_CONCURRENCY deve deixar ${NON_CONSUMER_CONNECTIONS} conexões de DATABASE_POOL_MAX para outbox, pendências e readiness`,
+    );
   }
 
   if (problems.length > 0) {

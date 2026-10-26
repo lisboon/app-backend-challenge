@@ -6,9 +6,19 @@ import {
   TransactionContext,
   type TransactionManager,
 } from '../../modules/@shared/domain/transaction/transaction-manager';
-import { isTransientFailure } from './database-errors';
+import {
+  isTransientFailure,
+  type LockConflictReason,
+  lockConflictReason,
+} from './database-errors';
 
 const LOCK_TIMEOUT = "set local lock_timeout = '2s'";
+
+export interface LockConflictMonitor {
+  conflict(reason: LockConflictReason): void;
+}
+
+const UNOBSERVED: LockConflictMonitor = { conflict: () => undefined };
 
 export class MikroOrmTransactionContext extends TransactionContext {
   constructor(readonly em: EntityManager) {
@@ -24,7 +34,10 @@ export function entityManagerOf(trx: TransactionContext): EntityManager {
 }
 
 export class MikroOrmTransactionManager implements TransactionManager {
-  constructor(private readonly orm: MikroORM) {}
+  constructor(
+    private readonly orm: MikroORM,
+    private readonly conflicts: LockConflictMonitor = UNOBSERVED,
+  ) {}
 
   async execute<T>(work: (trx: TransactionContext) => Promise<T>): Promise<T> {
     return this.run(work, { isolationLevel: IsolationLevel.READ_COMMITTED });
@@ -47,6 +60,10 @@ export class MikroOrmTransactionManager implements TransactionManager {
         return work(new MikroOrmTransactionContext(em));
       }, options);
     } catch (error) {
+      const conflict = lockConflictReason(error);
+      if (conflict) {
+        this.conflicts.conflict(conflict);
+      }
       if (isTransientFailure(error)) {
         throw new InfrastructureUnavailableError('PostgreSQL');
       }

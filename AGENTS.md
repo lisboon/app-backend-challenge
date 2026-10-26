@@ -55,12 +55,14 @@ PR não é aprovado.
 | Adaptador de outra tecnologia (SQS, métrica) | `src/infra/<tecnologia>/<nome>.ts` | classe que implementa a porta | `infra/observability/reconciliation-monitor.ts` |
 | Caso de uso | `src/modules/<ctx>/usecase/<ação>/<ação>.usecase.ts` e `.usecase.dto.ts`. A pasta é **só a ação** (`create`, `find-by-id`, `submit`, `reconcile`, `resolve-pending`), com qualificador apenas quando a ação sozinha for ambígua dentro do módulo (`list-ledger`). O módulo já está no caminho; não o repita | a classe **inclui o agregado**, porque é nome global: `<Ação><Agregado>UseCase` (`FindWalletByIdUseCase`), com DTOs e interface no mesmo prefixo | `wallet/usecase/find-by-id/` |
 | Saída compartilhada entre casos de uso | `src/modules/<ctx>/usecase/<nome>.output.dto.ts` | interface + função `to<Nome>Output` | `wallet/usecase/wallet.output.dto.ts` |
-| Colaborador usado por mais de um caso de uso | `src/modules/<ctx>/usecase/<nome>.ts` | uma classe com um propósito, sem framework | (criada no passo 2) |
-| Contrato de entrada usado por mais de um canal (HTTP e fila) | `src/infra/contract/<nome>.contract.ts` | schemas zod estritos | (criado no passo 3) |
+| Colaborador usado por mais de um caso de uso | `src/modules/<ctx>/usecase/<nome>.ts` | uma classe com um propósito, sem framework; função pura quando não guarda dependência nem estado | `wagering/usecase/wager-transaction-settlement.ts`, `wagering/usecase/wager-transaction-candidate.ts` |
+| Contrato de entrada usado por mais de um canal (HTTP e fila) | `src/infra/contract/<nome>.contract.ts` | schemas zod estritos | `infra/contract/wager-transaction.contract.ts` |
 | Documento além de README e ARCHITECTURE | `docs/<nome>.md` | — | (criado no passo 4) |
 | Montagem do contexto | `src/modules/<ctx>/factory/<ctx>.factory.ts` | `const <Ctx>Factory = { create(...) }` | `wallet/factory/wallet.factory.ts` |
 | Rota HTTP | `src/infra/http/<ctx>/<ctx>.controller.ts`, `.module.ts`, `.request.ts` | controller sem regra, só `parseRequest` e caso de uso | `infra/http/wallet/` |
+| Peça transversal da API | `src/infra/http/shared/<nome>.ts`, agrupada em subpasta quando forem várias do mesmo tema | interceptor, filtro, decorator, middleware ou provider de ciclo, registrado no `AppModule`; o que precisa rodar antes do body parser entra em `configureHttpApplication`, chamada pelo `main.ts` e pelos testes | `infra/http/shared/correlation.interceptor.ts`, `infra/http/shared/configure-http-application.ts` |
 | Ciclo de worker | `src/infra/worker/<nome>-worker.ts` | `@Injectable` com `OnModuleInit`/`OnModuleDestroy` | `infra/worker/outbox-worker.ts` |
+| Decisão pura de um worker | `src/infra/worker/<nome>.ts` | função pura sem framework nem I/O, testada em unidade | `infra/worker/message-disposition.ts` |
 | Migration | `src/infra/database/migrations/Migration<AAAAMMDD><NNNNNN><Nome>.ts`, listada em `index.ts` | `up` e `down` | `Migration20261024000002WagerSubmit.ts` |
 | Verificação automatizada | `scripts/<nome>.ts`; configuração ESM em `scripts/package.json` | script executável em Bun | `scripts/check-imports.ts` |
 | Teste | `tests/unit/<ctx>/<arquivo>.spec.ts`, `tests/integration/<área>.integration.spec.ts`, `tests/e2e/<área>.e2e.spec.ts`; apoio em `tests/support/` | — | `tests/unit/wallet/wallet.entity.spec.ts` |
@@ -142,6 +144,12 @@ Verificado por `bun run lint` (oxlint e `scripts/check-imports.ts`):
   nome dela.
 - Para cada comportamento crítico, faça uma mutação proposital, confirme que
   algum teste falha e desfaça. Liste as mutações no PR.
+- Falha de infraestrutura no meio do trabalho é caminho testado, não exceção.
+  Todo ponto de entrada novo (rota, ciclo de worker, consumidor) entra em
+  `tests/integration/connection-fault.integration.spec.ts`: a queda de conexão
+  dentro da transação responde como transitória (503 ou retry, nunca 500,
+  `FAILED` ou DLQ), não deixa efeito parcial e não consome recurso para sempre.
+  Depois das quedas, a operação volta a funcionar e o processo encerra.
 
 ## Rubrica
 
@@ -159,7 +167,8 @@ mais. A tabela vai preenchida na descrição do PR, com evidência para cada not
 | R7 | Documentação das decisões no `ARCHITECTURE.md` e no `README.md` | 5 |
 
 Teto: verificação vermelha limita a 70; qualquer falha eliminatória do
-`CHALLENGE.md` (seção 14) limita a 50.
+`CHALLENGE.md` (seção 14) limita a 50. R1 só passa de 20 com a matriz de falha
+de infraestrutura verde para todo ponto de entrada que o PR toca.
 
 ## Git e PR
 

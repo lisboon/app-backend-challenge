@@ -1,12 +1,17 @@
+import { DomainError } from '../../../@shared/domain/errors/domain.error';
 import { WalletNotFoundError } from '../../../@shared/domain/errors/wallet-not-found.error';
-import { FailureCode } from '../../../@shared/domain/failure-code';
+import { FailureCode, FailureKind } from '../../../@shared/domain/failure-code';
 import type { TransactionManager } from '../../../@shared/domain/transaction/transaction-manager';
 import type { Clock } from '../../../@shared/gateway/clock.gateway';
 import {
   WagerTransactionStatus,
   type WagerTransaction,
 } from '../../domain/wager-transaction.entity';
-import type { PendingReferenceMonitor } from '../../gateway/pending-reference-monitor.gateway';
+import type {
+  PendingReferenceMonitor,
+  PendingReferenceOutcome,
+} from '../../gateway/pending-reference-monitor.gateway';
+import type { WagerTransactionMonitor } from '../../gateway/wager-transaction-monitor.gateway';
 import type {
   PendingWagerTransaction,
   WagerTransactionGateway,
@@ -27,6 +32,7 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
     private readonly settlement: WagerTransactionSettlement,
     private readonly clock: Clock,
     private readonly monitor: PendingReferenceMonitor,
+    private readonly wagerMonitor: WagerTransactionMonitor,
   ) {}
 
   async execute(
@@ -71,11 +77,14 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
       return 1;
     } catch (error) {
       this.monitor.failed(candidate, error);
-      return this.retry(candidate);
+      return this.afterFailure(candidate, isInternal(error));
     }
   }
 
-  private async retry(candidate: PendingWagerTransaction): Promise<number> {
+  private async afterFailure(
+    candidate: PendingWagerTransaction,
+    internal: boolean,
+  ): Promise<number> {
     try {
       const transaction = await this.transactions.execute(async (trx) => {
         const wallet = await this.wallets.lock(candidate.walletId, trx);
@@ -90,14 +99,18 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
         if (!pending || !pending.isReferenceDue(now)) {
           return null;
         }
-        pending.scheduleReferenceRetry(now);
+        if (internal) {
+          pending.fail(FailureCode.PROCESSING_FAILED, now);
+        } else {
+          pending.scheduleReferenceRetry(now);
+        }
         await this.wagers.update(pending, trx);
         return pending;
       });
       if (!transaction) {
         return 0;
       }
-      this.monitor.retryScheduled(transaction);
+      this.record(transaction);
       return 1;
     } catch (error) {
       this.monitor.failed(candidate, error);
@@ -110,13 +123,26 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
       this.monitor.retryScheduled(transaction);
       return;
     }
-    this.monitor.resolved(
-      transaction,
-      transaction.status === WagerTransactionStatus.Processed
-        ? 'processed'
-        : transaction.failureCode === FailureCode.REFERENCE_NOT_FOUND
-          ? 'expired'
-          : 'rejected',
-    );
+    this.monitor.resolved(transaction, outcomeOf(transaction));
+    this.wagerMonitor.recorded(transaction);
   }
+}
+
+function outcomeOf(transaction: WagerTransaction): PendingReferenceOutcome {
+  if (transaction.status === WagerTransactionStatus.Processed) {
+    return 'processed';
+  }
+  if (transaction.status === WagerTransactionStatus.Failed) {
+    return 'failed';
+  }
+  return transaction.failureCode === FailureCode.REFERENCE_NOT_FOUND
+    ? 'expired'
+    : 'rejected';
+}
+
+function isInternal(error: unknown): boolean {
+  return (
+    !(error instanceof DomainError) ||
+    error.failureKind === FailureKind.INTERNAL
+  );
 }

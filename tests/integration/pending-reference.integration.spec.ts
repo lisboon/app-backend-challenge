@@ -31,6 +31,7 @@ import { startApp } from '../support/http-app';
 import { eventsQueue, receiveEvents, testSqs } from '../support/outbox';
 import { freePort, spawnWorker, testAppEnv } from '../support/process';
 import { retryTransient } from '../support/retry-transient';
+import { RecordingWagerMonitor } from '../support/wager-monitor';
 
 type Wallet = { walletId: string; playerId: string };
 type Body = Omit<
@@ -184,6 +185,7 @@ describe('referências pendentes com PostgreSQL e LocalStack reais', () => {
       ids: { next: uuid },
       clock: { now: () => now },
       pendingMonitor: monitor,
+      wagerMonitor: new RecordingWagerMonitor(),
       pendingReferenceTtlSeconds: ttl,
     }).resolvePending.execute({ limit: 100 });
   const bet = async (wallet: Wallet, externalTransactionId: string) => {
@@ -444,7 +446,7 @@ describe('referências pendentes com PostgreSQL e LocalStack reais', () => {
     expect(await invariant(wallet)).toBe('100.00');
   });
 
-  it('trigger inesperado preserva pendência mesmo após TTL, agenda retry e depois recupera', async () => {
+  it('trigger inesperado encerra a pendência como FAILED auditável, sem retry sem fim', async () => {
     const wallet = await open();
     const external = uuid();
     const accepted = await submit(
@@ -463,13 +465,13 @@ describe('referências pendentes com PostgreSQL e LocalStack reais', () => {
     try {
       expect(await cycle(1)).toEqual({ attempted: 1 });
       expect(await row(accepted.result.transactionId)).toMatchObject({
-        status: 'PENDING_REFERENCE',
-        failure_code: null,
-        reference_attempts: 1,
+        status: 'FAILED',
+        failure_code: 'PROCESSING_FAILED',
+        next_reference_attempt_at: null,
       });
       expect(await events(accepted.result.transactionId)).toHaveLength(1);
       expect(await registry.metrics()).toContain(
-        'pending_reference_retries_total 1',
+        'pending_reference_resolved_total{outcome="failed"} 1',
       );
       expect(JSON.stringify(logs)).not.toContain('123456.78');
       expect(JSON.stringify(logs)).not.toContain('falha financeira secreta');
@@ -480,11 +482,11 @@ describe('referências pendentes com PostgreSQL e LocalStack reais', () => {
         .execute('drop trigger test_pending_failure on wager_transactions');
       await orm.em.fork().execute('drop function test_pending_failure()');
     }
-    now = new Date(now.getTime() + 1000);
-    expect(await cycle(1)).toEqual({ attempted: 1 });
-    expect((await row(accepted.result.transactionId)).status).toBe('PROCESSED');
-    expect(await events(accepted.result.transactionId)).toHaveLength(3);
-    expect(await invariant(wallet)).toBe('100.00');
+    now = new Date(now.getTime() + 3_600_000);
+    expect(await cycle(1)).toEqual({ attempted: 0 });
+    expect((await row(accepted.result.transactionId)).status).toBe('FAILED');
+    expect(await events(accepted.result.transactionId)).toHaveLength(1);
+    expect(await invariant(wallet)).toBe('75.00');
   });
 
   it('referência que chega rejeitada produz rejeição auditável no ciclo normal', async () => {

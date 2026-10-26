@@ -247,9 +247,9 @@ describe('schema (integração com PostgreSQL real)', () => {
             .getConnection()
             .execute<{ n: string }[]>(
               `select (select count(*) from pg_tables where schemaname = 'public'
-                       and tablename in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages'))
+                       and tablename in ('wallets', 'wager_transactions', 'wallet_ledger_entries', 'outbox_messages', 'inbox_messages'))
                   + (select count(*) from pg_proc
-                      where proname like 'wallet%' or proname like 'wager%' or proname like 'outbox%') as n`,
+                      where proname like 'wallet%' or proname like 'wager%' or proname like 'outbox%' or proname like 'inbox%') as n`,
             )
         )[0].n;
 
@@ -257,7 +257,7 @@ describe('schema (integração com PostgreSQL real)', () => {
       expect(Number(await objects())).toBe(0);
 
       await orm.migrator.up();
-      expect(Number(await objects())).toBe(18);
+      expect(Number(await objects())).toBe(21);
     });
 
     it('reverter a última migration preserva rejeições gravadas em outra moeda', async () => {
@@ -1276,7 +1276,7 @@ describe('schema (integração com PostgreSQL real)', () => {
       await invariant(opened.walletId);
     });
 
-    it('SQL cru permite pendência, retry sem transição e rejeição, mas não volta a PENDING nem avança para FAILED', async () => {
+    it('SQL cru permite pendência, retry sem transição e rejeição, mas não volta a PENDING', async () => {
       const opened = await openWallet('0.00');
       const id = await pending(opened, {
         status: 'PENDING',
@@ -1294,21 +1294,19 @@ describe('schema (integração com PostgreSQL real)', () => {
           [id],
         ),
       );
-      for (const status of ['PENDING', 'FAILED']) {
-        expect(
-          await failureOf(() =>
-            inTransaction((em) =>
-              em.execute('update wager_transactions set status=? where id=?', [
-                status,
-                id,
-              ]),
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "update wager_transactions set status='PENDING' where id=?",
+              [id],
             ),
           ),
-        ).toMatchObject({
-          code: '23514',
-          constraint: 'wager_transactions_protect',
-        });
-      }
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'wager_transactions_protect',
+      });
       await inTransaction((em) =>
         em.execute(
           "update wager_transactions set status='REJECTED',failure_code='REFERENCE_NOT_FOUND',result_balance=0,result_currency='BRL',next_reference_attempt_at=null,processed_at=now() where id=?",
@@ -1323,6 +1321,29 @@ describe('schema (integração com PostgreSQL real)', () => {
         );
       expect(saved).toEqual({ status: 'REJECTED', reference_attempts: 1 });
       await invariant(opened.walletId);
+    });
+
+    it('reverter a migration de FAILED volta a recusar PENDING_REFERENCE para FAILED', async () => {
+      const opened = await openWallet('0.00');
+      const before = await pending(opened);
+      const after = await pending(opened);
+      const fail = (id: string) =>
+        inTransaction((em) =>
+          em.execute(
+            "update wager_transactions set status='FAILED',failure_code='PROCESSING_FAILED',next_reference_attempt_at=null,processed_at=now() where id=?",
+            [id],
+          ),
+        );
+
+      await orm.migrator.down({ to: 'Migration20261025000006Inbox' });
+      const refused = await failureOf(() => fail(before));
+      await orm.migrator.up();
+
+      expect(refused).toMatchObject({
+        code: '23514',
+        constraint: 'wager_transactions_protect',
+      });
+      await fail(after);
     });
 
     it('lock de pendente ignora uma linha já travada sem depender do lock da wallet', async () => {
@@ -1487,21 +1508,45 @@ describe('schema (integração com PostgreSQL real)', () => {
         ).toMatchObject({ code: '23514', constraint: 'wallets_protect' });
       },
     );
-    it('SQL cru recusa transição de PENDING para FAILED', async () => {
+    it('SQL cru recusa FAILED com saldo observado', async () => {
       const { id } = await row();
       expect(
         await failureOf(() =>
           inTransaction((em) =>
             em.execute(
-              "update wager_transactions set status='FAILED',failure_code='TEST',processed_at=now() where id=?",
+              "update wager_transactions set status='FAILED',failure_code='TEST',result_balance=0,result_currency='BRL',processed_at=now() where id=?",
               [id],
             ),
           ),
         ),
-      ).toMatchObject({
-        code: '23514',
-        constraint: 'wager_transactions_protect',
-      });
+      ).toMatchObject({ code: '23514' });
+    });
+    it('SQL cru permite PENDING para FAILED e depois o trata como terminal', async () => {
+      const { id } = await row();
+      await inTransaction((em) =>
+        em.execute(
+          "update wager_transactions set status='FAILED',failure_code='TEST',processed_at=now() where id=?",
+          [id],
+        ),
+      );
+      for (const change of [
+        "status='PROCESSED',failure_code=null,result_balance=0,result_currency='BRL'",
+        "failure_code='OTHER'",
+      ]) {
+        expect(
+          await failureOf(() =>
+            inTransaction((em) =>
+              em.execute(
+                'update wager_transactions set ' + change + ' where id=?',
+                [id],
+              ),
+            ),
+          ),
+        ).toMatchObject({
+          code: '23514',
+          constraint: 'wager_transactions_protect',
+        });
+      }
     });
     it.each(['PROCESSED', 'REJECTED'])(
       'SQL cru permite PENDING para %s',
@@ -1742,6 +1787,144 @@ describe('schema (integração com PostgreSQL real)', () => {
           [id],
         );
       expect(row).toEqual({ attempts: 1, last_error: 'TimeoutError' });
+    });
+  });
+  describe('inbox_messages', () => {
+    const insert = (em: EntityManager, messageId: string, hash = HASH) =>
+      em.execute(
+        "insert into inbox_messages (consumer_name,message_id,payload_hash,received_at) values ('wager-transactions',?,?,now())",
+        [messageId, hash],
+      );
+    const processed = async (messageId: string): Promise<void> => {
+      await inTransaction(async (em) => {
+        await insert(em, messageId);
+        await em.execute(
+          'update inbox_messages set processed_at = received_at where message_id = ?',
+          [messageId],
+        );
+      });
+    };
+
+    it('round-trip da migration da inbox preserva o schema anterior', async () => {
+      await orm.migrator.down({ to: 'Migration20261025000005WagerReversals' });
+      const [absent] = await orm.em
+        .fork()
+        .execute<{ name: string | null }[]>(
+          "select to_regclass('inbox_messages')::text as name",
+        );
+      expect(absent.name).toBeNull();
+      await orm.migrator.up();
+      const [present] = await orm.em
+        .fork()
+        .execute<{ name: string | null }[]>(
+          "select to_regclass('inbox_messages')::text as name",
+        );
+      expect(present.name).toBe('inbox_messages');
+    });
+
+    it('recusa o mesmo messageId duas vezes para o mesmo consumidor', async () => {
+      const messageId = uuid();
+      await inTransaction((em) => insert(em, messageId));
+      expect(
+        await failureOf(() => inTransaction((em) => insert(em, messageId))),
+      ).toMatchObject({ code: '23505', constraint: 'inbox_messages_pk' });
+    });
+
+    it('recusa hash fora do formato', async () => {
+      expect(
+        await failureOf(() =>
+          inTransaction((em) => insert(em, uuid(), 'sem-versao')),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_payload_hash_ck' });
+    });
+
+    it('recusa processamento anterior ao recebimento', async () => {
+      const messageId = uuid();
+      await inTransaction((em) => insert(em, messageId));
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "update inbox_messages set processed_at = received_at - interval '1 second' where message_id = ?",
+              [messageId],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_processed_at_ck' });
+    });
+
+    it.each([
+      "consumer_name = 'outro'",
+      "message_id = 'outro'",
+      "payload_hash = 'v1:" + 'b'.repeat(64) + "'",
+      "received_at = received_at + interval '1 second'",
+    ])('recusa alteração da identidade: %s', async (assignment) => {
+      const messageId = uuid();
+      await inTransaction((em) => insert(em, messageId));
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              'update inbox_messages set ' +
+                assignment +
+                ' where message_id = ?',
+              [messageId],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_message_immutable' });
+    });
+
+    it('recusa qualquer alteração depois de processada', async () => {
+      const messageId = uuid();
+      await processed(messageId);
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute(
+              "update inbox_messages set processed_at = processed_at + interval '1 second' where message_id = ?",
+              [messageId],
+            ),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_message_immutable' });
+    });
+
+    it('recusa DELETE', async () => {
+      const messageId = uuid();
+      await processed(messageId);
+      expect(
+        await failureOf(() =>
+          inTransaction((em) =>
+            em.execute('delete from inbox_messages where message_id = ?', [
+              messageId,
+            ]),
+          ),
+        ),
+      ).toMatchObject({ code: '23514', constraint: 'inbox_message_immutable' });
+    });
+
+    it('recusa TRUNCATE com o nome do trigger', async () => {
+      expect(
+        await failureOf(() =>
+          inTransaction((em) => em.execute('truncate inbox_messages')),
+        ),
+      ).toMatchObject({
+        code: '23514',
+        constraint: 'inbox_message_no_truncate',
+      });
+    });
+
+    it('permite marcar como processada uma única vez', async () => {
+      const messageId = uuid();
+      await processed(messageId);
+      const [row] = await orm.em
+        .fork()
+        .execute<{ processed: boolean }[]>(
+          'select processed_at is not null as processed from inbox_messages where message_id = ?',
+          [messageId],
+        );
+      expect(row.processed).toBe(true);
     });
   });
 });

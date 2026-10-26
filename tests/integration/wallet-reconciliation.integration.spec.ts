@@ -19,6 +19,9 @@ import {
 import { startApp } from '../support/http-app';
 import { debitWallet } from '../support/ledger';
 
+const divergences = (metrics: string): string | undefined =>
+  metrics.match(/wallet_reconciliation_divergences_total (\d+)/)?.[1];
+
 describe('reconciliação com infraestrutura real', () => {
   let orm: MikroORM;
   let app: INestApplication;
@@ -95,7 +98,7 @@ describe('reconciliação com infraestrutura real', () => {
     const id = await open();
     await debitWallet(orm, id);
     await debitWallet(orm, id);
-    const before = await metric();
+    const before = divergences(await metric());
     const warn = spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     try {
       const response = await reconcile(id);
@@ -106,7 +109,7 @@ describe('reconciliação com infraestrutura real', () => {
         checkedEntries: 3,
       });
       expect(warn).not.toHaveBeenCalled();
-      expect(await metric()).toBe(before);
+      expect(divergences(await metric())).toBe(before);
     } finally {
       warn.mockRestore();
     }
@@ -198,11 +201,14 @@ describe('reconciliação com infraestrutura real', () => {
     await invariant(id);
   });
 
-  it('expõe somente as métricas da wallet e da outbox em um registro por aplicação', async () => {
+  it('expõe só as famílias de métrica da aplicação, em um registro por aplicação', async () => {
     const families = [...(await metric()).matchAll(/# TYPE (\w+)/g)]
       .map((match) => match[1])
       .sort();
     expect(families).toEqual([
+      'http_request_duration_seconds',
+      'idempotent_replays_total',
+      'lock_conflicts_total',
       'outbox_lag_seconds',
       'outbox_publish_failures_total',
       'outbox_publish_retries_total',
@@ -210,6 +216,7 @@ describe('reconciliação com infraestrutura real', () => {
       'pending_reference_resolved_total',
       'pending_reference_retries_total',
       'pending_reference_transactions',
+      'wager_transactions_total',
       'wallet_reconciliation_divergences_total',
     ]);
     const other = await startApp();

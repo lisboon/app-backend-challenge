@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { uuid } from '../shared/validation/uuid';
+import { uuid } from '../../contract/uuid.contract';
 import { ledgerCursor } from './ledger.cursor';
 
 export const ledgerQuery = z.strictObject({

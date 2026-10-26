@@ -55,11 +55,13 @@ services:
     environment:
       PORT: "3000"
       DATABASE_URL: postgresql://${POSTGRES_USER:-wager}:${POSTGRES_PASSWORD:-wager}@postgres:5432/${POSTGRES_DB:-wager}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-15}
       AWS_REGION: us-east-1
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       SQS_ENDPOINT: http://sqs:4566
       WAGER_QUEUE_NAME: wager-transactions.fifo
+      WAGER_DLQ_NAME: wager-transactions-dlq.fifo
       EVENTS_QUEUE_NAME: ${EVENTS_QUEUE_NAME:-wallet-events.fifo}
       PENDING_REFERENCE_TTL_SECONDS: ${PENDING_REFERENCE_TTL_SECONDS:-3600}
     ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
@@ -81,10 +83,14 @@ services:
       AWS_SECRET_ACCESS_KEY: test
       SQS_ENDPOINT: http://sqs:4566
       WAGER_QUEUE_NAME: wager-transactions.fifo
+      WAGER_DLQ_NAME: wager-transactions-dlq.fifo
       EVENTS_QUEUE_NAME: ${EVENTS_QUEUE_NAME:-wallet-events.fifo}
       PENDING_REFERENCE_TTL_SECONDS: ${PENDING_REFERENCE_TTL_SECONDS:-3600}
       OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-500}
       PENDING_REFERENCE_POLL_INTERVAL_MS: ${PENDING_REFERENCE_POLL_INTERVAL_MS:-1000}
+      CONSUMER_RETRY_BASE_SECONDS: ${CONSUMER_RETRY_BASE_SECONDS:-2}
+      CONSUMER_CONCURRENCY: ${CONSUMER_CONCURRENCY:-10}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-15}
       WORKER_METRICS_PORT: "3001"
     ports: ["127.0.0.1:${WORKER_METRICS_PORT:-3001}:3001"]
     healthcheck:

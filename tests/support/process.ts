@@ -1,6 +1,11 @@
 import { resolve } from 'node:path';
 
-import { testInfra, WAGER_QUEUE_NAME, EVENTS_QUEUE_NAME } from './http-app';
+import {
+  EVENTS_QUEUE_NAME,
+  testInfra,
+  WAGER_DLQ_NAME,
+  WAGER_QUEUE_NAME,
+} from './http-app';
 
 const ROOT = resolve(__dirname, '../..');
 const MAIN = 'src/infra/http/main.ts';
@@ -31,6 +36,7 @@ export function testAppEnv(port: number): Record<string, string> {
     AWS_SECRET_ACCESS_KEY: 'test',
     SQS_ENDPOINT: infra.sqsEndpoint,
     WAGER_QUEUE_NAME,
+    WAGER_DLQ_NAME,
     EVENTS_QUEUE_NAME,
   };
 }

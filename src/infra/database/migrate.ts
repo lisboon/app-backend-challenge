@@ -1,5 +1,6 @@
 import { MikroORM } from '@mikro-orm/postgresql';
 
+import { DEFAULT_DATABASE_POOL_MAX } from '../config/app-config';
 import { ormConfig } from './orm.config';
 
 type Command = 'up' | 'down' | 'status';
@@ -28,7 +29,7 @@ async function main(): Promise<void> {
   if (!url) {
     throw new Error('DATABASE_URL ausente');
   }
-  const orm = await MikroORM.init(ormConfig(url));
+  const orm = await MikroORM.init(ormConfig(url, DEFAULT_DATABASE_POOL_MAX));
   try {
     console.log(JSON.stringify(await run(orm, command as Command)));
   } finally {

@@ -16,12 +16,14 @@ import { WagerTransactionStatus } from '../../../modules/wagering/domain/wager-t
 import type { WageringUseCases } from '../../../modules/wagering/factory/wagering.factory';
 import type { SubmitWagerTransactionUseCaseOutputDto } from '../../../modules/wagering/usecase/submit/submit.usecase.dto';
 import type { WagerTransactionOutputDto } from '../../../modules/wagering/usecase/wager-transaction.output.dto';
+import {
+  idempotencyKey,
+  submitWagerTransactionContract,
+} from '../../contract/wager-transaction.contract';
 import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';
 import {
-  idempotencyKey,
   providerTransactionParams,
-  submitWagerTransactionRequest,
   transactionIdParam,
 } from './wagering.request';
 
@@ -41,17 +43,11 @@ export class WageringController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<SubmitWagerTransactionUseCaseOutputDto> {
     const result = await this.useCases.submit.execute({
-      ...parseRequest(submitWagerTransactionRequest, body),
+      ...parseRequest(submitWagerTransactionContract, body),
       idempotencyKey: idempotencyKeyFrom(key),
       correlationId,
     });
-    response.status(
-      result.status === WagerTransactionStatus.Rejected
-        ? HttpStatus.UNPROCESSABLE_ENTITY
-        : result.status === WagerTransactionStatus.PendingReference
-          ? HttpStatus.ACCEPTED
-          : HttpStatus.CREATED,
-    );
+    response.status(httpStatusOf(result.status));
     return result;
   }
 
@@ -80,4 +76,17 @@ function idempotencyKeyFrom(header: string | undefined): string {
     throw new IdempotencyKeyMissingError();
   }
   return parseRequest(idempotencyKey, key);
+}
+
+function httpStatusOf(status: WagerTransactionStatus): HttpStatus {
+  switch (status) {
+    case WagerTransactionStatus.Rejected:
+      return HttpStatus.UNPROCESSABLE_ENTITY;
+    case WagerTransactionStatus.PendingReference:
+      return HttpStatus.ACCEPTED;
+    case WagerTransactionStatus.Failed:
+      return HttpStatus.INTERNAL_SERVER_ERROR;
+    default:
+      return HttpStatus.CREATED;
+  }
 }

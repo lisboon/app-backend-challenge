@@ -1,19 +1,26 @@
 import { INestApplication, ModuleMetadata } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
-import type { AppConfig } from '../../src/infra/config/app-config';
+import {
+  type AppConfig,
+  DEFAULT_DATABASE_POOL_MAX,
+} from '../../src/infra/config/app-config';
 import { APP_CONFIG } from '../../src/infra/config/config.module';
 import { AppModule } from '../../src/infra/http/app.module';
+import { configureHttpApplication } from '../../src/infra/http/shared/configure-http-application';
 
 export const WAGER_QUEUE_NAME = 'wager-transactions.fifo';
+export const WAGER_DLQ_NAME = 'wager-transactions-dlq.fifo';
 export const EVENTS_QUEUE_NAME = 'wallet-events.fifo';
 
 export interface TestInfra {
   databaseUrl: string;
   sqsEndpoint: string;
   wagerQueueName: string;
+  wagerDeadLetterQueueName: string;
   eventsQueueName: string;
   pendingReferenceTtlSeconds?: number;
+  databasePoolMax?: number;
 }
 
 export function testInfra(): TestInfra {
@@ -21,6 +28,7 @@ export function testInfra(): TestInfra {
     databaseUrl: required('TEST_DATABASE_URL'),
     sqsEndpoint: required('TEST_SQS_ENDPOINT'),
     wagerQueueName: WAGER_QUEUE_NAME,
+    wagerDeadLetterQueueName: WAGER_DLQ_NAME,
     eventsQueueName: process.env.EVENTS_QUEUE_NAME ?? EVENTS_QUEUE_NAME,
   };
 }
@@ -30,26 +38,33 @@ export interface RunningApp {
   baseUrl: string;
 }
 
-export async function startApp(
-  overrides: Partial<TestInfra> = {},
-  extra: Pick<ModuleMetadata, 'controllers'> = {},
-): Promise<RunningApp> {
+export function testAppConfig(overrides: Partial<TestInfra> = {}): AppConfig {
   const infra = { ...testInfra(), ...overrides };
-
-  const config: AppConfig = {
+  return {
     port: 0,
     workerMetricsPort: 0,
     outboxPollIntervalMs: 500,
     pendingReferencePollIntervalMs: 1000,
     pendingReferenceTtlSeconds: infra.pendingReferenceTtlSeconds ?? 3600,
+    consumerRetryBaseSeconds: 1,
+    consumerConcurrency: 10,
     databaseUrl: infra.databaseUrl,
+    databasePoolMax: infra.databasePoolMax ?? DEFAULT_DATABASE_POOL_MAX,
     sqs: {
       region: 'us-east-1',
       endpoint: infra.sqsEndpoint,
       wagerQueueName: infra.wagerQueueName,
+      wagerDeadLetterQueueName: infra.wagerDeadLetterQueueName,
       eventsQueueName: infra.eventsQueueName,
     },
   };
+}
+
+export async function startApp(
+  overrides: Partial<TestInfra> = {},
+  extra: Pick<ModuleMetadata, 'controllers'> = {},
+): Promise<RunningApp> {
+  const config = testAppConfig(overrides);
 
   const moduleRef = await Test.createTestingModule({
     imports: [AppModule],
@@ -60,6 +75,7 @@ export async function startApp(
     .compile();
 
   const app = moduleRef.createNestApplication({ logger: false });
+  configureHttpApplication(app);
   await app.listen(0);
   return { app, baseUrl: await app.getUrl() };
 }

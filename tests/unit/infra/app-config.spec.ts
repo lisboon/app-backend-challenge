@@ -11,6 +11,7 @@ const valid = {
   AWS_REGION: 'us-east-1',
   SQS_ENDPOINT: 'http://sqs:4566',
   WAGER_QUEUE_NAME: 'wager-transactions.fifo',
+  WAGER_DLQ_NAME: 'wager-transactions-dlq.fifo',
   EVENTS_QUEUE_NAME: 'wallet-events.fifo',
 };
 
@@ -51,6 +52,64 @@ describe('loadConfig', () => {
     );
   }
 
+  it('lê base de retry e concorrência do consumidor', () => {
+    const config = loadConfig({
+      ...valid,
+      CONSUMER_RETRY_BASE_SECONDS: '1',
+      CONSUMER_CONCURRENCY: '3',
+    });
+    expect(config.consumerRetryBaseSeconds).toBe(1);
+    expect(config.consumerConcurrency).toBe(3);
+  });
+
+  it.each([
+    ['CONSUMER_RETRY_BASE_SECONDS', '301', 'entre 1 e 300'],
+    ['CONSUMER_RETRY_BASE_SECONDS', '0', 'entre 1 e 300'],
+    ['CONSUMER_CONCURRENCY', '101', 'entre 1 e 100'],
+    ['CONSUMER_CONCURRENCY', 'abc', 'entre 1 e 100'],
+    ['DATABASE_POOL_MAX', '1', 'entre 2 e 200'],
+    ['DATABASE_POOL_MAX', '201', 'entre 2 e 200'],
+    ['DATABASE_POOL_MAX', 'abc', 'entre 2 e 200'],
+  ])('recusa %s = %s', (name, value, range) => {
+    expect(problemsOf({ ...valid, [name]: value })).toEqual([
+      name + ' deve ser inteiro ' + range,
+    ]);
+  });
+
+  it('lê o tamanho do pool do banco', () => {
+    expect(
+      loadConfig({ ...valid, DATABASE_POOL_MAX: '40' }).databasePoolMax,
+    ).toBe(40);
+  });
+
+  it('aceita concorrência que deixa três conexões para os outros ciclos', () => {
+    expect(
+      loadConfig({
+        ...valid,
+        DATABASE_POOL_MAX: '15',
+        CONSUMER_CONCURRENCY: '12',
+      }).consumerConcurrency,
+    ).toBe(12);
+  });
+
+  it('recusa concorrência que esgotaria o pool do banco', () => {
+    expect(
+      problemsOf({
+        ...valid,
+        DATABASE_POOL_MAX: '15',
+        CONSUMER_CONCURRENCY: '13',
+      }),
+    ).toEqual([
+      'CONSUMER_CONCURRENCY deve deixar 3 conexões de DATABASE_POOL_MAX para outbox, pendências e readiness',
+    ]);
+  });
+
+  it('recusa DLQ que não é fila FIFO', () => {
+    expect(problemsOf({ ...valid, WAGER_DLQ_NAME: 'dlq' })).toEqual([
+      'WAGER_DLQ_NAME deve ser nome de fila FIFO',
+    ]);
+  });
+
   it('lê a configuração completa', () => {
     expect(loadConfig(valid)).toEqual({
       port: 3000,
@@ -58,11 +117,15 @@ describe('loadConfig', () => {
       outboxPollIntervalMs: 500,
       pendingReferencePollIntervalMs: 1000,
       pendingReferenceTtlSeconds: 3600,
+      consumerRetryBaseSeconds: 2,
+      consumerConcurrency: 10,
       databaseUrl: valid.DATABASE_URL,
+      databasePoolMax: 15,
       sqs: {
         region: 'us-east-1',
         endpoint: 'http://sqs:4566',
         wagerQueueName: 'wager-transactions.fifo',
+        wagerDeadLetterQueueName: 'wager-transactions-dlq.fifo',
         eventsQueueName: 'wallet-events.fifo',
       },
     });
@@ -83,6 +146,7 @@ describe('loadConfig', () => {
       'DATABASE_URL ausente',
       'AWS_REGION ausente',
       'WAGER_QUEUE_NAME ausente',
+      'WAGER_DLQ_NAME ausente',
       'EVENTS_QUEUE_NAME ausente',
     ]);
   });

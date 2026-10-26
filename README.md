@@ -3,8 +3,9 @@
 Solução do desafio técnico da Jungle Gaming. O enunciado está em
 [`CHALLENGE.md`](CHALLENGE.md) e as decisões em [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-> Em construção. Submissão HTTP, reversões, referências pendentes e publicação
-> da outbox estão disponíveis. Consumo SQS de entrada e inbox vêm no próximo incremento.
+> Em construção. Submissão por HTTP e pela fila SQS (com inbox), reversões,
+> referências pendentes, publicação da outbox e observabilidade estão
+> disponíveis. Autenticação e teste de carga vêm no próximo incremento.
 
 ## Pré-requisitos
 
@@ -21,8 +22,10 @@ curl http://127.0.0.1:3000/health/ready
 O `--wait` só retorna quando PostgreSQL, SQS, API e worker estão saudáveis.
 Antes dos processos subirem, `migrate` aplica as migrations e termina. O
 LocalStack cria `wager-transactions.fifo`, `wager-transactions-dlq.fifo` e
-`wallet-events.fifo`. O worker publica os eventos confirmados da outbox na
-fila de eventos e reprocessa referências pendentes em um ciclo independente. Nenhum passo é manual.
+`wallet-events.fifo`. O worker consome `wager-transactions.fifo` pelo mesmo
+caso de uso da HTTP, publica os eventos confirmados da outbox na fila de
+eventos e reprocessa referências pendentes, em ciclos independentes. Nenhum
+passo é manual.
 
 | Serviço | Endereço local |
 |---|---|
@@ -41,10 +44,10 @@ As portas mudam com `API_PORT`, `WORKER_METRICS_PORT`, `POSTGRES_PORT` e `SQS_PO
 | `GET /wallets/:walletId` | `200`, `404` ou `400` se o id não é UUID |
 | `GET /wallets/:walletId/ledger?cursor=...&limit=50` | `200` com `items` e `nextCursor`; limite de 1 a 100; `400` para query inválida e `404` para wallet inexistente |
 | `POST /wallets/:walletId/reconciliation` | Sem corpo; `200` com saldos armazenado/calculado, diferença, consistência e quantidade de entradas; `400` para id inválido e `404` para wallet inexistente |
-| `POST /wagering/transactions` | Header `Idempotency-Key` obrigatório; `201` aplicada, `202` aguardando referência, `422` rejeitada com `failureCode`; reenvio consulta o estado atual com `idempotentReplay: true`; `409` para chave ou `externalTransactionId` com outro payload; `404` para wallet inexistente; `503` se o lock não sai em 2 s |
+| `POST /wagering/transactions` | Header `Idempotency-Key` obrigatório; `201` aplicada, `202` aguardando referência, `422` rejeitada com `failureCode`; reenvio consulta o estado atual com `idempotentReplay: true`; `409` para chave ou `externalTransactionId` com outro payload; `404` para wallet inexistente; `503` se o lock não sai em 2 s; `500` com o corpo da transação se a chave já tem um `FAILED` gravado pela fila |
 | `GET /wagering/transactions/:transactionId` | `200` com a transação e o saldo observado, `404` ou `400` |
 | `GET /providers/:providerId/wagering/transactions/:externalTransactionId` | `200` ou `404` |
-| `GET /metrics` | Texto Prometheus com reconciliação, outbox e referências pendentes; colete os ciclos no processo worker |
+| `GET /metrics` | Texto Prometheus: transações por status, replays, conflitos de lock, latência por rota e reconciliação; as métricas do consumo, da outbox e das pendências vêm do worker |
 | `GET /health/live` | `200` enquanto o processo está de pé |
 | `GET /health/ready` | `200` com PostgreSQL e ambas as filas SQS alcançáveis; `503` dizendo qual dependência caiu |
 
@@ -120,10 +123,29 @@ Os GET por id e por provedor/id externo mostram `referenceExternalTransactionId`
 e `referenceTransactionId`; o interno só é preenchido após aplicação.
 
 Referência ausente por uma hora vira REJECTED com `REFERENCE_NOT_FOUND` e
-evento de rejeição. Referência ainda pendente ou erro de processamento não gera
-essa rejeição. Eventos da resolução preservam o correlationId do primeiro
-submit; retries não criam eventos. Regras, precedência, transições e proteções
-SQL estão na [seção 10 da arquitetura](ARCHITECTURE.md#10-reversões-e-referências-pendentes).
+evento de rejeição. Referência ainda pendente não gera essa rejeição; falha
+transitória agenda retry, e erro interno encerra a pendência como `FAILED`.
+Eventos da resolução preservam o correlationId do primeiro submit; retries não
+criam eventos. Regras, precedência, transições e proteções SQL estão na
+[seção 10 da arquitetura](ARCHITECTURE.md#10-reversões-e-referências-pendentes).
+
+## Enviar pela fila
+
+A mensagem segue o §10 do enunciado. O grupo FIFO é a wallet, e a fila não
+deduplica por conteúdo, então o envio informa o id de deduplicação:
+
+```bash
+docker compose exec sqs sh -c 'queue_url=$(awslocal sqs get-queue-url --queue-name wager-transactions.fifo --query QueueUrl --output text); awslocal sqs send-message --queue-url "$queue_url" --message-group-id "<walletId>" --message-deduplication-id msg-1 --message-body "{\"messageId\":\"msg-1\",\"type\":\"WagerTransactionRequested\",\"occurredAt\":\"2026-10-26T12:00:00.000Z\",\"data\":{\"providerId\":\"provider-a\",\"externalTransactionId\":\"bet-q1\",\"idempotencyKey\":\"provider-a:bet-q1\",\"playerId\":\"<playerId>\",\"walletId\":\"<walletId>\",\"roundId\":\"round-1\",\"gameId\":\"game-1\",\"kind\":\"BET\",\"money\":{\"amount\":\"10.00\",\"currency\":\"BRL\"}}}"'
+```
+
+O worker grava a mensagem na inbox na mesma transação do efeito e confirma a
+entrega só depois do commit. A mesma mensagem entregue de novo não repete o
+efeito. Rejeição de negócio é confirmada como desfecho; falha transitória volta
+para a fila com backoff; erro permanente vai para `wager-transactions-dlq.fifo`
+com o atributo `failureCode`; depois de 5 recebimentos, o redrive do SQS também
+move para a DLQ. Os detalhes estão na
+[seção 11 da arquitetura](ARCHITECTURE.md#11-consumo-sqs-inbox-e-failed).
+
 ## Rodar a API fora do container
 
 ```bash
@@ -137,7 +159,7 @@ bun run dev
 `migrate:down` reverte a última migration e `migrate:status` lista as aplicadas
 e as pendentes.
 
-Em outro terminal, com o mesmo `.env`, inicie o worker de publicação e referências:
+Em outro terminal, com o mesmo `.env`, inicie o worker de consumo, publicação e referências:
 
 ```bash
 bun run start:worker
@@ -146,28 +168,30 @@ curl http://127.0.0.1:3001/metrics
 
 | Variável | Padrão / uso |
 |---|---|
+| `WAGER_QUEUE_NAME` e `WAGER_DLQ_NAME` | Obrigatórias; filas de entrada e DLQ, com nome FIFO |
+| `CONSUMER_CONCURRENCY` | `10`; de 1 a 100 leitores da fila por worker, cada um com uma mensagem por vez |
+| `CONSUMER_RETRY_BASE_SECONDS` | `2`; de 1 a 300, base do backoff da mensagem com falha transitória |
+| `DATABASE_POOL_MAX` | `15`; de 2 a 200 conexões por processo; precisa deixar 3 além de `CONSUMER_CONCURRENCY`, e a soma entre processos não pode passar do `max_connections` do PostgreSQL |
 | `EVENTS_QUEUE_NAME` | Obrigatória; `.env.example` usa `wallet-events.fifo`. Deve ser um nome FIFO; configura também o hook do LocalStack |
 | `OUTBOX_POLL_INTERVAL_MS` | `500`; inteiro de 1 a 2147483647, intervalo entre ciclos do publicador |
 | `PENDING_REFERENCE_TTL_SECONDS` | `3600`; prazo desde createdAt para rejeitar uma referência ainda inexistente; mesmo valor na API e no worker |
 | `PENDING_REFERENCE_POLL_INTERVAL_MS` | `1000`; intervalo entre ciclos de resolução no worker |
 | `WORKER_METRICS_PORT` | `3001`; porta das métricas, independente da API |
 
-O worker tem `outbox_lag_seconds`, `outbox_published_total`,
-`outbox_publish_failures_total` e `outbox_publish_retries_total`. Os contadores
-têm label `event_type`. Publica prefixos de eventos por wallet, em ordem de
+O catálogo de métricas e logs está na
+[seção 12 da arquitetura](ARCHITECTURE.md#12-observabilidade). A outbox publica prefixos de eventos por wallet, em ordem de
 sequence, com até dez wallets em paralelo. Uma falha interrompe apenas aquela
 wallet, sem tentar seus eventos seguintes. Eventos
 com falha recebem backoff exponencial de 1 s até 5 min e continuam pendentes,
-sem limite de tentativas. SIGTERM para ambos os schedulers e conclui os lotes em andamento antes de sair.
+sem limite de tentativas. SIGTERM para os schedulers e os leitores da fila,
+conclui os lotes e a mensagem em andamento e só então sai.
 
 O ciclo de referências processa até 100 candidatos por lote. Retries usam backoff
 de 1 s até 5 min, antecipado quando a referência chega na mesma wallet. A
-expiração só rejeita referências inexistentes; referências existentes ou falhas
-de processamento continuam pendentes além do TTL. As métricas são
-`pending_reference_transactions`, `pending_reference_resolved_total` (outcome
-`processed`, `rejected`, `expired`) e `pending_reference_retries_total`. A gauge
-observa o total no banco; evite somá-la entre workers. As duas variáveis novas
-aceitam inteiros de 1 a 2147483647.
+expiração só rejeita referências inexistentes; referências existentes continuam
+pendentes além do TTL, e erro interno vira `FAILED`. A gauge
+`pending_reference_transactions` observa o total no banco; evite somá-la entre
+workers. As variáveis de intervalo e TTL aceitam inteiros de 1 a 2147483647.
 
 Para inspecionar eventos publicados no ambiente local:
 
