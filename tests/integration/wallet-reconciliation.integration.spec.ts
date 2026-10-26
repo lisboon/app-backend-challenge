@@ -68,6 +68,52 @@ describe('reconciliação com infraestrutura real', () => {
     return response.text();
   };
 
+  it('wallet no saldo máximo reconcilia mesmo com o giro de créditos acima da faixa', async () => {
+    const playerId = Bun.randomUUIDv7();
+    const opened = await fetch(baseUrl + '/wallets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        playerId,
+        initialBalance: { amount: '999999999999999999.99', currency: 'BRL' },
+      }),
+    });
+    const id = ((await opened.json()) as { id: string }).id;
+    for (const kind of ['BET', 'WIN']) {
+      const response = await fetch(baseUrl + '/wagering/transactions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': Bun.randomUUIDv7(),
+        },
+        body: JSON.stringify({
+          providerId: 'provider-limit',
+          externalTransactionId: Bun.randomUUIDv7(),
+          playerId,
+          walletId: id,
+          roundId: 'round-1',
+          gameId: 'game-1',
+          kind,
+          money: { amount: '1.00', currency: 'BRL' },
+        }),
+      });
+      expect(response.status).toBe(201);
+    }
+
+    const response = await reconcile(id);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      walletId: id,
+      storedBalance: { amount: '999999999999999999.99', currency: 'BRL' },
+      calculatedBalance: { amount: '999999999999999999.99', currency: 'BRL' },
+      difference: { amount: '0.00', currency: 'BRL' },
+      consistent: true,
+      checkedEntries: 3,
+    });
+    await invariant(id);
+  });
+
   it('wallet zero tem reconciliação consistente sem entradas', async () => {
     const id = await open('0.00');
     expect(await (await reconcile(id)).json()).toEqual({

@@ -57,7 +57,7 @@ PR não é aprovado.
 | Saída compartilhada entre casos de uso | `src/modules/<ctx>/usecase/<nome>.output.dto.ts` | interface + função `to<Nome>Output` | `wallet/usecase/wallet.output.dto.ts` |
 | Colaborador usado por mais de um caso de uso | `src/modules/<ctx>/usecase/<nome>.ts` | uma classe com um propósito, sem framework; função pura quando não guarda dependência nem estado | `wagering/usecase/wager-transaction-settlement.ts`, `wagering/usecase/wager-transaction-candidate.ts` |
 | Contrato de entrada usado por mais de um canal (HTTP e fila) | `src/infra/contract/<nome>.contract.ts` | schemas zod estritos | `infra/contract/wager-transaction.contract.ts` |
-| Documento além de README e ARCHITECTURE | `docs/<nome>.md` | — | (criado no passo 4) |
+| Documento além de README e ARCHITECTURE | `docs/<nome>.md` | — | `docs/load-test.md` |
 | Montagem do contexto | `src/modules/<ctx>/factory/<ctx>.factory.ts` | `const <Ctx>Factory = { create(...) }` | `wallet/factory/wallet.factory.ts` |
 | Rota HTTP | `src/infra/http/<ctx>/<ctx>.controller.ts`, `.module.ts`, `.request.ts` | controller sem regra, só `parseRequest` e caso de uso | `infra/http/wallet/` |
 | Peça transversal da API | `src/infra/http/shared/<nome>.ts`, agrupada em subpasta quando forem várias do mesmo tema | interceptor, filtro, decorator, middleware ou provider de ciclo, registrado no `AppModule`; o que precisa rodar antes do body parser entra em `configureHttpApplication`, chamada pelo `main.ts` e pelos testes | `infra/http/shared/correlation.interceptor.ts`, `infra/http/shared/configure-http-application.ts` |
@@ -66,6 +66,7 @@ PR não é aprovado.
 | Migration | `src/infra/database/migrations/Migration<AAAAMMDD><NNNNNN><Nome>.ts`, listada em `index.ts` | `up` e `down` | `Migration20261024000002WagerSubmit.ts` |
 | Verificação automatizada | `scripts/<nome>.ts`; configuração ESM em `scripts/package.json` | script executável em Bun | `scripts/check-imports.ts` |
 | Teste | `tests/unit/<ctx>/<arquivo>.spec.ts`, `tests/integration/<área>.integration.spec.ts`, `tests/e2e/<área>.e2e.spec.ts`; apoio em `tests/support/` | — | `tests/unit/wallet/wallet.entity.spec.ts` |
+| Teste de carga | `tests/load/<nome>.ts`, rodado por `bun run test:load` contra a stack de `docker-compose.load.yml` | script Bun, sem dependência nova | `tests/load/run.ts` |
 
 Regras que acompanham o mapa:
 

@@ -6,7 +6,7 @@ export interface ListWalletLedgerUseCaseInputDto {
   beforeVersion?: number;
   limit: number;
 }
-export interface LedgerEntryOutputDto {
+interface LedgerEntryOutputDto {
   id: string;
   transactionId: string;
   direction: string;

@@ -1,5 +1,5 @@
 import { Logger, Module, OnApplicationShutdown } from '@nestjs/common';
-import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 
 import { ConfigModule } from '../config/config.module';
 import { DatabaseModule } from '../database/database.module';
@@ -7,6 +7,11 @@ import { ObservabilityModule } from '../observability/observability.module';
 import { QueueModule } from '../queue/queue.module';
 import { RuntimeModule } from '../runtime/runtime.module';
 import { HealthModule } from './health/health.module';
+import { AuthGuard } from './shared/auth/auth.guard';
+import {
+  AnonymousAuthenticator,
+  REQUEST_AUTHENTICATOR,
+} from './shared/auth/request-authenticator';
 import { CorrelationInterceptor } from './shared/correlation.interceptor';
 import { HttpErrorFilter } from './shared/errors/http-error.filter';
 import { HttpKeepAlive } from './shared/http-keep-alive';
@@ -27,6 +32,8 @@ import { WalletModule } from './wallet/wallet.module';
   ],
   providers: [
     { provide: APP_FILTER, useClass: HttpErrorFilter },
+    { provide: REQUEST_AUTHENTICATOR, useClass: AnonymousAuthenticator },
+    { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_INTERCEPTOR, useClass: CorrelationInterceptor },
     HttpKeepAlive,
     RequestObservabilityMiddleware,

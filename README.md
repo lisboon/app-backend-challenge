@@ -3,9 +3,10 @@
 Solução do desafio técnico da Jungle Gaming. O enunciado está em
 [`CHALLENGE.md`](CHALLENGE.md) e as decisões em [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-> Em construção. Submissão por HTTP e pela fila SQS (com inbox), reversões,
-> referências pendentes, publicação da outbox e observabilidade estão
-> disponíveis. Autenticação e teste de carga vêm no próximo incremento.
+Wallets com ledger imutável, apostas e reversões por HTTP e pela fila SQS
+(com inbox), referências fora de ordem, outbox para os eventos, métricas
+Prometheus, logs JSON e teste de carga. A autenticação é um ponto de extensão
+documentado, sem Identity Provider (seção 13 da arquitetura).
 
 ## Pré-requisitos
 
@@ -35,6 +36,53 @@ passo é manual.
 | SQS (LocalStack) | `http://127.0.0.1:4566` |
 
 As portas mudam com `API_PORT`, `WORKER_METRICS_PORT`, `POSTGRES_PORT` e `SQS_PORT`.
+Para parar, `docker compose down`; para apagar também os dados,
+`docker compose down -v`.
+
+## Primeira aposta
+
+Abra uma wallet e guarde o `id` da resposta:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/wallets \
+  -H 'content-type: application/json' \
+  -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
+```
+
+```json
+{ "id": "<walletId>", "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1", "balance": { "amount": "1000.00", "currency": "BRL" }, "version": 1 }
+```
+
+Aposte 25,00 com esse `id`:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/wagering/transactions \
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:bet-1' \
+  -d '{"providerId":"provider-a","externalTransactionId":"bet-1","walletId":"<walletId>","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","roundId":"round-1","gameId":"game-1","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+```
+
+```json
+{ "transactionId": "<transactionId>", "status": "PROCESSED", "failureCode": null, "balance": { "amount": "975.00", "currency": "BRL" }, "idempotentReplay": false }
+```
+
+Repetir o mesmo comando devolve o mesmo resultado com `idempotentReplay: true`,
+sem novo débito. Mudar o valor e manter a chave responde `409`. Para conferir:
+
+```bash
+curl -s http://127.0.0.1:3000/wallets/<walletId>
+curl -s "http://127.0.0.1:3000/wallets/<walletId>/ledger?limit=10"
+curl -s -X POST http://127.0.0.1:3000/wallets/<walletId>/reconciliation
+curl -s http://127.0.0.1:3000/wagering/transactions/<transactionId>
+curl -s http://127.0.0.1:3000/providers/provider-a/wagering/transactions/bet-1
+```
+
+Uma aposta sem saldo é registrada como `REJECTED` e responde `422` com o corpo
+da transação, consultável depois pelo `GET`. Os demais erros saem no mesmo
+envelope, com um `failureCode` que diz ao provedor se reenviar adianta:
+
+```json
+{ "statusCode": 409, "failureCode": "IDEMPOTENCY_PAYLOAD_CONFLICT", "message": "a Idempotency-Key já foi usada com outro payload" }
+```
 
 ## Endpoints
 
@@ -64,11 +112,10 @@ Com o PostgreSQL indisponível, os endpoints de wallet respondem `503` com
 ou gera um UUIDv7 quando o header falta ou é inválido. O valor acompanha os
 eventos financeiros. Replays mantêm a outbox original, sem novos eventos.
 
-```bash
-curl -X POST http://127.0.0.1:3000/wallets \
-  -H 'content-type: application/json' \
-  -d '{"playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","initialBalance":{"amount":"1000.00","currency":"BRL"}}'
-```
+Toda rota passa por um `AuthGuard` global; só `/health/live` e `/health/ready`
+são públicas. Hoje o autenticador aceita toda requisição: é o ponto de
+extensão para um Identity Provider, descrito na
+[seção 13 da arquitetura](ARCHITECTURE.md#13-autenticação).
 
 ## Apostas, reversões e referência fora de ordem
 
@@ -85,22 +132,24 @@ ter o mesmo player, wallet, moeda e rodada. WIN com referência só aceita BET,
 sem exigir o mesmo valor. Cada referência aceita uma reversão de cada tipo;
 BET já reembolsado não pode receber ROLLBACK enquanto o REFUND não for desfeito.
 
-Exemplo com uma wallet já aberta: substitua walletId e playerId pelos valores
-retornados por `POST /wallets`. Aplique o BET de 25, reembolse e depois desfaça
-o próprio reembolso com ROLLBACK (saldo inicial 100: 75 → 100 → 75):
+Exemplo na wallet da primeira aposta, que tem 975,00 depois do `bet-1`. Aplique
+um novo BET de 25, reembolse e depois desfaça o próprio reembolso com ROLLBACK
+(975 → 950 → 975 → 950). Cada transação tem seu próprio `externalTransactionId`
+e sua própria `Idempotency-Key`: repetir `bet-1` com outra chave responde 409
+`EXTERNAL_TRANSACTION_CONFLICT`.
 
 ```bash
 curl -X POST http://127.0.0.1:3000/wagering/transactions \
-  -H 'content-type: application/json' -H 'Idempotency-Key: bet-1' \
-  -d '{"providerId":"provider-a","externalTransactionId":"bet-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:bet-2' \
+  -d '{"providerId":"provider-a","externalTransactionId":"bet-2","walletId":"<walletId>","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","roundId":"round-2","gameId":"game-1","kind":"BET","money":{"amount":"25.00","currency":"BRL"}}'
 
 curl -X POST http://127.0.0.1:3000/wagering/transactions \
-  -H 'content-type: application/json' -H 'Idempotency-Key: refund-1' \
-  -d '{"providerId":"provider-a","externalTransactionId":"refund-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"REFUND","referenceExternalTransactionId":"bet-1","money":{"amount":"25.00","currency":"BRL"}}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:refund-2' \
+  -d '{"providerId":"provider-a","externalTransactionId":"refund-2","walletId":"<walletId>","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","roundId":"round-2","gameId":"game-1","kind":"REFUND","referenceExternalTransactionId":"bet-2","money":{"amount":"25.00","currency":"BRL"}}'
 
 curl -X POST http://127.0.0.1:3000/wagering/transactions \
-  -H 'content-type: application/json' -H 'Idempotency-Key: rollback-refund-1' \
-  -d '{"providerId":"provider-a","externalTransactionId":"rollback-refund-1","walletId":"<walletId>","playerId":"<playerId>","roundId":"round-1","gameId":"game-1","kind":"ROLLBACK","referenceExternalTransactionId":"refund-1","money":{"amount":"25.00","currency":"BRL"}}'
+  -H 'content-type: application/json' -H 'Idempotency-Key: provider-a:rollback-refund-2' \
+  -d '{"providerId":"provider-a","externalTransactionId":"rollback-refund-2","walletId":"<walletId>","playerId":"0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1","roundId":"round-2","gameId":"game-1","kind":"ROLLBACK","referenceExternalTransactionId":"refund-2","money":{"amount":"25.00","currency":"BRL"}}'
 ```
 
 Se REFUND chegar antes de BET, a resposta será `202`:
@@ -193,7 +242,9 @@ pendentes além do TTL, e erro interno vira `FAILED`. A gauge
 `pending_reference_transactions` observa o total no banco; evite somá-la entre
 workers. As variáveis de intervalo e TTL aceitam inteiros de 1 a 2147483647.
 
-Para inspecionar eventos publicados no ambiente local:
+## Eventos, DLQ, métricas e logs
+
+Eventos publicados pela outbox:
 
 ```bash
 docker compose exec sqs sh -c 'queue_url=$(awslocal sqs get-queue-url --queue-name "$EVENTS_QUEUE_NAME" --query QueueUrl --output text); awslocal sqs receive-message --queue-url "$queue_url" --max-number-of-messages 10 --wait-time-seconds 2 --message-system-attribute-names All'
@@ -202,6 +253,24 @@ docker compose exec sqs sh -c 'queue_url=$(awslocal sqs get-queue-url --queue-na
 O corpo contém o envelope versionado, com eventId e correlationId; o grupo é a
 wallet. A entrega é at-least-once. Consumidores devem deduplicar por eventId,
 inclusive depois da janela de cinco minutos de deduplicação do SQS FIFO.
+
+Mensagens na DLQ, com o motivo no atributo `failureCode` (ausente quando foi o
+redrive do SQS, depois de 5 recebimentos):
+
+```bash
+docker compose exec sqs sh -c 'queue_url=$(awslocal sqs get-queue-url --queue-name wager-transactions-dlq.fifo --query QueueUrl --output text); awslocal sqs receive-message --queue-url "$queue_url" --max-number-of-messages 10 --wait-time-seconds 2 --message-attribute-names All'
+```
+
+Métricas e logs:
+
+```bash
+curl -s http://127.0.0.1:3000/metrics | grep -E '^(wager_transactions_total|idempotent_replays_total|lock_conflicts_total)'
+curl -s http://127.0.0.1:3001/metrics | grep -E '^(wager_message|inbox_duplicates|wager_dlq_messages|outbox_lag_seconds)'
+docker compose logs -f api worker
+```
+
+Contadores com rótulo, como `lock_conflicts_total{reason}`, só aparecem depois
+do primeiro incremento.
 
 ## Testes
 
@@ -217,6 +286,15 @@ A infraestrutura de teste usa banco em `tmpfs` e não toca nos dados do ambiente
 local. Cada suíte de integração reverte todas as migrations e as aplica de novo
 antes de rodar. Os endereços estão em `.env.test`, que o `bun test` carrega
 sozinho.
+
+```bash
+bun run test:load          # teste de carga, com 3 APIs e 2 workers
+```
+
+O teste de carga sobe e derruba sozinho uma stack isolada (projeto
+`wager-load`, portas 3100–3102, 3201–3202 e 4700), roda os cenários e confere a
+reconciliação de toda wallet usada. Leva cerca de três minutos. Metodologia,
+números e interpretação estão em [`docs/load-test.md`](docs/load-test.md).
 
 ## Qualidade
 

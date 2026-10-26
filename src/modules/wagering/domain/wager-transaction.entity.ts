@@ -92,7 +92,7 @@ export interface CreateWagerTransactionProps {
   correlationId: string;
 }
 
-export interface OpeningTransactionProps {
+interface OpeningTransactionProps {
   id: string;
   walletId: string;
   playerId: string;

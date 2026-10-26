@@ -7,6 +7,10 @@ import {
 } from '../../src/infra/config/app-config';
 import { APP_CONFIG } from '../../src/infra/config/config.module';
 import { AppModule } from '../../src/infra/http/app.module';
+import {
+  REQUEST_AUTHENTICATOR,
+  type RequestAuthenticator,
+} from '../../src/infra/http/shared/auth/request-authenticator';
 import { configureHttpApplication } from '../../src/infra/http/shared/configure-http-application';
 
 export const WAGER_QUEUE_NAME = 'wager-transactions.fifo';
@@ -62,17 +66,25 @@ export function testAppConfig(overrides: Partial<TestInfra> = {}): AppConfig {
 
 export async function startApp(
   overrides: Partial<TestInfra> = {},
-  extra: Pick<ModuleMetadata, 'controllers'> = {},
+  extra: Pick<ModuleMetadata, 'controllers'> & {
+    authenticator?: RequestAuthenticator;
+  } = {},
 ): Promise<RunningApp> {
   const config = testAppConfig(overrides);
 
-  const moduleRef = await Test.createTestingModule({
+  const builder = Test.createTestingModule({
     imports: [AppModule],
     controllers: extra.controllers ?? [],
   })
     .overrideProvider(APP_CONFIG)
-    .useValue(config)
-    .compile();
+    .useValue(config);
+  const moduleRef = await (
+    extra.authenticator
+      ? builder
+          .overrideProvider(REQUEST_AUTHENTICATOR)
+          .useValue(extra.authenticator)
+      : builder
+  ).compile();
 
   const app = moduleRef.createNestApplication({ logger: false });
   configureHttpApplication(app);

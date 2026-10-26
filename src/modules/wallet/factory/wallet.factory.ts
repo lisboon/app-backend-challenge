@@ -12,7 +12,7 @@ import { FindWalletByIdUseCase } from '../usecase/find-by-id/find-by-id.usecase'
 import { ListWalletLedgerUseCase } from '../usecase/list-ledger/list-ledger.usecase';
 import { ReconcileWalletUseCase } from '../usecase/reconcile/reconcile.usecase';
 
-export interface WalletFactoryDependencies {
+interface WalletFactoryDependencies {
   monitor: ReconciliationMonitor;
   transactions: TransactionManager;
   ids: IdGenerator;

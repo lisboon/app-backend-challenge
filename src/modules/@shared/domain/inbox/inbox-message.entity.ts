@@ -4,11 +4,11 @@ export interface InboxDelivery {
   payloadHash: string;
 }
 
-export interface ReceiveInboxProps extends InboxDelivery {
+interface ReceiveInboxProps extends InboxDelivery {
   receivedAt: Date;
 }
 
-export interface InboxMessageState extends ReceiveInboxProps {
+interface InboxMessageState extends ReceiveInboxProps {
   processedAt: Date | undefined;
 }
 

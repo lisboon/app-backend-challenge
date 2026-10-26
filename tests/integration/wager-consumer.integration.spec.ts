@@ -95,8 +95,8 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
 
   const metrics = (): Promise<string> => registry.metrics();
 
-  const startConsumer = (): void => {
-    const queue = new WagerQueue(sqs, queues.sourceName, queues.deadLetterName);
+  const startConsumer = (deadLetterName = queues.deadLetterName): void => {
+    const queue = new WagerQueue(sqs, queues.sourceName, deadLetterName);
     worker = new WagerMessageWorker(
       queue,
       useCases.submitFor,
@@ -218,6 +218,21 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
     await invariant(wallet.walletId);
   });
 
+  it('DLQ que não recebe a mensagem não conta como enviada', async () => {
+    const wallet = await open();
+    await send('{nao-json', wallet.walletId);
+    startConsumer(`dlq-inexistente-${uuid()}.fifo`);
+
+    await eventually(async () =>
+      (await metrics()).includes(
+        'wager_message_settle_failures_total{action="dead-letter"}',
+      ),
+    );
+    expect(await metrics()).not.toContain(
+      'wager_messages_dead_lettered_total{',
+    );
+  });
+
   it('a mesma mensagem entregue duas vezes debita uma vez e confirma as duas', async () => {
     const wallet = await open();
     const body = message(wallet);
@@ -285,6 +300,11 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
       'wallet inexistente',
       (wallet: Wallet) => message({ ...wallet, walletId: uuid() }),
       FailureCode.WALLET_NOT_FOUND,
+    ],
+    [
+      'caractere NUL que o PostgreSQL não grava',
+      (wallet: Wallet) => message(wallet, { roundId: 'round\u00001' }),
+      FailureCode.MESSAGE_INVALID,
     ],
   ] as const)(
     'mensagem permanente vai direto para a DLQ: %s',

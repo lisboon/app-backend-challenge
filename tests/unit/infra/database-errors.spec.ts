@@ -37,3 +37,26 @@ describe('lockConflictReason', () => {
     expect(lockConflictReason(error)).toBeUndefined();
   });
 });
+
+describe('isTransientFailure', () => {
+  it.each([
+    ['sessão ociosa encerrada pelo servidor', { code: '25P03' }],
+    [
+      'cliente que perdeu a conexão',
+      new Error(
+        'Client has encountered a connection error and is not queryable',
+      ),
+    ],
+    ['cliente já fechado', new Error('Client was closed and is not queryable')],
+  ])('%s é transitório', (_caso, error) => {
+    expect(isTransientFailure(error)).toBe(true);
+  });
+
+  it.each([
+    { code: '23505' },
+    { code: '22021' },
+    new Error('invariante violada'),
+  ])('erro que não é de conexão continua interno: %p', (error) => {
+    expect(isTransientFailure(error)).toBe(false);
+  });
+});

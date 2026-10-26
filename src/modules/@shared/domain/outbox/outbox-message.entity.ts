@@ -4,7 +4,7 @@ import type {
   IntegrationEventJSON,
 } from '../event/integration-event';
 
-export interface OutboxMessageState {
+interface OutboxMessageState {
   id: string;
   aggregateId: string;
   eventType: string;

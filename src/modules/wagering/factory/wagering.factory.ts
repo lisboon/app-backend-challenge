@@ -18,7 +18,7 @@ import { ResolvePendingWagerTransactionsUseCase } from '../usecase/resolve-pendi
 import { SubmitWagerTransactionUseCase } from '../usecase/submit/submit.usecase';
 import { WagerTransactionSettlement } from '../usecase/wager-transaction-settlement';
 
-export interface WageringFactoryDependencies {
+interface WageringFactoryDependencies {
   transactions: TransactionManager;
   ids: IdGenerator;
   clock: Clock;

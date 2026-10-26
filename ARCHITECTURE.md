@@ -3,6 +3,26 @@
 Registro das escolhas, do porquê e do que foi descartado. Cada seção nasce no
 incremento que tomou a decisão.
 
+1. [Camadas por módulo](#1-camadas-por-módulo) e a
+   [rota de leitura do submit](#rota-de-leitura-o-submit-de-ponta-a-ponta)
+2. [Money](#2-money)
+3. [Taxonomia de falha e status HTTP](#3-taxonomia-de-falha-e-status-http)
+4. [Infraestrutura local](#4-infraestrutura-local): LocalStack, PostgreSQL,
+   imagem, por que MikroORM, Bun, servidor HTTP e readiness
+5. [Wallet, ledger e invariantes no schema](#5-wallet-ledger-e-invariantes-no-schema)
+6. [Transações e erros de banco](#6-transações-e-erros-de-banco): estratégia de
+   concorrência, pool e queda de conexão
+7. [Extrato e reconciliação](#7-extrato-e-reconciliação)
+8. [Submissão de transações de aposta](#8-submissão-de-transações-de-aposta)
+9. [Outbox](#9-outbox)
+10. [Reversões e referências pendentes](#10-reversões-e-referências-pendentes)
+11. [Consumo SQS, inbox e FAILED](#11-consumo-sqs-inbox-e-failed)
+12. [Observabilidade](#12-observabilidade)
+13. [Autenticação](#13-autenticação)
+14. [Trade-offs e limitações](#14-trade-offs-e-limitações)
+
+O teste de carga está em [`docs/load-test.md`](docs/load-test.md).
+
 ## 1. Camadas por módulo
 
 Cada contexto de negócio fica em `src/modules/<contexto>/`:
@@ -46,6 +66,59 @@ dos projetos anteriores. Dentro do agregado ficam os verbos do domínio pedidos
 no enunciado: `Wallet.open`, `WalletLedgerEntry.create` e `rehydrate`. O
 `LedgerGateway` permite criar e consultar lançamentos; a ausência de `update`
 e `delete` expressa no contrato que o ledger não muda.
+
+### Rota de leitura: o submit de ponta a ponta
+
+`POST /wagering/transactions` atravessa todas as camadas e é o melhor ponto de
+partida para ler o código. As regras de cada passo estão nas seções 8 a 10.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as WageringController
+    participant U as SubmitWagerTransactionUseCase
+    participant T as MikroOrmTransactionManager
+    participant W as WalletMovementRepository
+    participant R as WagerTransactionRepository
+    participant S as WagerTransactionSettlement
+    participant O as OutboxMessageRepository
+    C->>U: execute(contrato validado, Idempotency-Key)
+    U->>T: execute(trabalho): READ COMMITTED, lock_timeout 2 s
+    U->>W: lock(walletId): SELECT ... FOR UPDATE
+    U->>R: findByIdempotencyKey(provider, chave)
+    alt chave já gravada
+        R-->>U: transação gravada: replay, ou 409 se o hash difere
+    else chave nova
+        U->>S: apply(candidata, wallet travada)
+        S->>R: findByExternalId(referência) e findReversals
+        S->>W: wallet.apply: debit ou credit, update por versão, lançamento
+        S->>O: evento da transação
+        W->>O: WalletBalanceChanged, quando há movimento
+        U->>R: create(candidata): 23505 vira IdempotencyRaceError e nova tentativa
+    end
+    T-->>U: COMMIT, ou 503 se a falha é transitória
+    U-->>C: desfecho: o status define 201, 202, 422 ou 500
+    Note over O: depois do commit, o OutboxWorker publica no SQS
+```
+
+| Ordem | Arquivo | O que olhar |
+|---|---|---|
+| 1 | `src/infra/http/wagering/wagering.controller.ts` | header obrigatório, `parseRequest` e o status pelo desfecho |
+| 2 | `src/infra/contract/wager-transaction.contract.ts` | o contrato Zod compartilhado entre HTTP e fila |
+| 3 | `src/modules/wagering/factory/wagering.factory.ts` | como o caso de uso recebe as dependências concretas |
+| 4 | `src/modules/wagering/usecase/submit/submit.usecase.ts` | lock, idempotência e a nova tentativa |
+| 5 | `src/infra/database/mikro-orm-transaction-manager.ts` | isolamento, `lock_timeout` e a tradução para 503 |
+| 6 | `src/modules/wagering/usecase/wager-transaction-settlement.ts` | rejeitar, aguardar referência ou processar |
+| 7 | `src/modules/wagering/domain/wager-transaction.entity.ts` | `rejectionFor`, `awaitsReference` e `ledgerDirectionFor` |
+| 8 | `src/modules/wallet/repository/wallet-movement.repository.ts` | a porta que o contexto de apostas usa para mover a wallet |
+| 9 | `src/modules/wallet/domain/wallet.entity.ts` | `debit` e `credit` com as invariantes de saldo |
+| 10 | `src/modules/wagering/repository/wager-transaction.repository.ts` | o `23505` do índice único virando `IdempotencyRaceError` |
+| 11 | `src/infra/http/shared/errors/http-error.filter.ts` | o mapa de falha para status e o `Retry-After` |
+| 12 | `src/infra/worker/outbox-worker.ts` | a publicação do que ficou na outbox |
+
+O consumo da fila entra no mesmo caso de uso pelo
+`src/infra/worker/wager-message-worker.ts`, com a inbox na mesma transação
+(seção 11).
 
 ## 2. Money
 
@@ -173,6 +246,13 @@ partir do 18 a imagem oficial guarda os dados em
 `/var/lib/postgresql/18/docker` e recusa subir quando há algo montado no caminho
 antigo, com volume ou com `tmpfs`.
 
+O healthcheck usa `pg_isready -h 127.0.0.1`, por TCP. Num volume novo, o
+`initdb` sobe um servidor temporário que escuta só no socket Unix e depois o
+desliga; um `pg_isready` pelo socket responde "pronto" nesse intervalo, e a
+migration, que conecta por TCP, recebia `ECONNREFUSED`. Medido dentro do
+container a cada 20 ms: 5 amostras com o socket pronto e o TCP recusado, antes
+do servidor definitivo.
+
 ### Imagem da API
 
 `oven/bun:1.4.2-alpine`, 185 MB. A Alpine foi a menor entre as bases do Bun
@@ -185,6 +265,32 @@ antigo, com volume ou com `tmpfs`.
   alterar o próprio código.
 - **`.dockerignore` em lista branca.** Só entram `package.json`, `bun.lock`,
   `tsconfig.json` e `src/`, nunca `.env`.
+
+### Por que MikroORM
+
+O §4 prefere MikroORM e aceita TypeORM. Ficamos com o MikroORM pelo que ele
+torna explícito e pelo que de fato usamos:
+
+| Recurso | Onde | Para quê |
+|---|---|---|
+| `em.fork()` por chamada, com `allowGlobalContext: false` | `MikroOrmTransactionManager`, `orm.config.ts` | cada transação tem o próprio Identity Map; usar o `EntityManager` global falha em vez de misturar estado entre requisições concorrentes |
+| `transactional()` com `isolationLevel` e `readOnly` | `execute` (`READ COMMITTED`) e `snapshot` (`REPEATABLE READ`, só leitura) | o nível de isolamento é escolhido por operação |
+| `LockMode.PESSIMISTIC_WRITE` | `WalletRepository.findByIdForUpdate` | o `SELECT ... FOR UPDATE` que serializa a wallet |
+| `nativeUpdate` com filtro e contagem de linhas | `WalletRepository.update` (por `version`), outbox, inbox, transação pendente | a escrita só vale se a linha ainda está no estado lido |
+| Migrator com `migrationsList` | `migrations/index.ts` | migrations versionadas e reversíveis, sem descoberta por glob, o que funciona no Bun e no CommonJS |
+
+**O que não usamos, de propósito: o Unit of Work implícito e o `flush()`.**
+Nenhum repositório chama `persist` ou `flush`; toda gravação é um `insert` ou
+um `nativeUpdate` feito pelo gateway, dentro do contexto da transação. Assim, a
+ordem das escritas é a do caso de uso (o lançamento antes da transação, com a
+FK verificada no commit), cada atualização confere quantas linhas mudou, e uma
+entidade alterada em memória nunca é gravada sem que um gateway peça. O
+domínio também não depende do ORM: os models e os mappers ficam em
+`repository/`, e as entidades são classes puras.
+
+O mapeamento do `Money` (`NUMERIC(20,2)` ↔ `p.decimal('string')` ↔
+`decimal.js`), com os testes que provam que nenhum valor passa por `number`,
+está na seção 2.
 
 ### MikroORM 7 num projeto CommonJS
 
@@ -309,6 +415,44 @@ não gera eventos. A publicação depois do commit está descrita na seção 9.
 
 ## 6. Transações e erros de banco
 
+### Estratégia de concorrência
+
+O §8 deixa a estratégia à escolha e exige justificativa. A unidade de
+concorrência é a wallet, e a estratégia é **lock pessimista por wallet em
+`READ COMMITTED`, com escrita condicionada à versão como defesa**:
+
+1. Toda operação que move saldo abre uma transação `READ COMMITTED` e trava a
+   wallet com `SELECT ... FOR UPDATE` antes de qualquer decisão. Idempotência,
+   estado da referência, reversões existentes e saldo são lidos com o lock
+   retido.
+2. A gravação da wallet é um `UPDATE ... WHERE id = ? AND version = ?`, que
+   precisa afetar exatamente uma linha, e o ledger tem
+   `UNIQUE (wallet_id, wallet_version)`. Se o lock fosse removido por engano,
+   uma atualização perdida viraria erro, não saldo errado.
+3. `lock_timeout` de 2 s limita a espera. Estourado, o `55P03` vira 503 com
+   `Retry-After` (seção 3), sem efeito, e o retry com a mesma chave é seguro.
+4. A ordem de lock é sempre wallet antes da linha da transação, inclusive no
+   resolver de pendências, que pega a linha com `SKIP LOCKED`. Com uma ordem
+   única não há ciclo de espera entre o submit e o resolver.
+5. A reconciliação usa `REPEATABLE READ` só leitura: saldo e soma do ledger
+   saem do mesmo snapshot, sem travar a wallet.
+
+O lock vive no PostgreSQL, então vale entre processos: o teste com três APIs e
+o de três workers usam a mesma garantia. A ordem FIFO do SQS por wallet é
+otimização (§8); quem decide é o lock.
+
+**Alternativas descartadas:**
+
+| Alternativa | Por que não |
+|---|---|
+| Otimista com retry limitado | Na hot wallet, todas as operações leem a mesma versão e só uma vence por rodada. Com n concorrentes, a rodada k tem n − k perdedores: a conta dá n(n + 1)/2 tentativas, 1.275 para as 50 apostas simultâneas do teste, contra 50 com o lock. Com um teto de retries, o excedente vira erro para o provedor. É análise, não medição; o teste de carga mede o pessimista |
+| Update atômico condicionado, sem lock (`balance = balance - x where balance >= x`) | Resolve o débito simples, mas não as decisões que dependem de várias linhas lidas antes do update: a busca da idempotency key, o estado da referência e a regra de uma reversão líquida por BET (seção 10). Entre a leitura e o update haveria uma janela de check-then-act. As constraints do schema pegariam parte disso como erro, mas o desfecho de negócio correto (`REJECTED` gravado) precisa da decisão serializada |
+| `SERIALIZABLE` | Também serializaria, mas por aborto: o conflito chega como `40001` depois do trabalho feito, e a hot wallet viraria uma sequência de retries, o mesmo problema do otimista |
+
+O custo assumido é que operações da mesma wallet são seriais: a vazão de uma
+hot wallet é limitada pela duração da transação. Wallets diferentes não
+compartilham lock e avançam em paralelo.
+
 Todo acesso ao banco passa pelo `TransactionManager`, inclusive as leituras.
 O adaptador abre um `EntityManager` isolado (`em.fork()`) por chamada e executa
 o trabalho de `execute` em `READ COMMITTED`, com `lock_timeout` de 2 s. Os gateways recebem o contexto da transação como
@@ -325,7 +469,7 @@ aparece nos dois casos:
 | `23505` em `wager_tx_idempotency_uk` | nova tentativa do submit, que encontra a transação gravada (seção 8) |
 | `23505` em `wager_tx_external_uk` | `EXTERNAL_TRANSACTION_CONFLICT` (409) |
 | `23505` em `wager_tx_single_reversal_uk` | `REFERENCE_ALREADY_REVERSED`; o submit refaz uma tentativa e registra a rejeição de negócio (422) |
-| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `57P01`–`57P03`, timeout de conexão do pool, `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
+| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `25P03` (sessão ociosa encerrada no meio da transação), `57P01`–`57P03`, timeout de conexão do pool, cliente do `pg` que perdeu a conexão ("is not queryable", sem código), `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
 | qualquer outro | 500, porque é defeito, não condição de negócio |
 
 **Conflitos de lock são contados antes da tradução.** O `55P03` (lock não
@@ -366,10 +510,20 @@ MikroORM depender da 0.29.7.
 `pg_terminate_backend` com a operação bloqueada dentro da transação, em toda
 rota da API e nos ciclos do worker, com pool pequeno. Com o kysely antigo, os
 oito testes falham e o encerramento trava; com o atual, a falha responde 503 ou vira retry, sem efeito
-parcial, e a operação seguinte funciona. Resta um custo conhecido: o `pg` não
-marca como morto o cliente cujo backend foi encerrado, e ele volta ao pool. O
-próximo uso dele falha uma vez, também como transitório, e só então é
-descartado. É uma falha a mais por queda, sem efeito em dado.
+parcial, e a operação seguinte funciona.
+
+**A queda também pode acontecer entre dois comandos.** Num restart do
+PostgreSQL, a conexão pode cair enquanto a transação está entre um comando e o
+seguinte. O `pg` então não devolve um SQLSTATE: o comando seguinte falha com
+"Client has encountered a connection error and is not queryable". Quando o
+servidor encerra a sessão ociosa no meio da transação, chega `25P03`. Os dois
+viravam 500 até uma avaliação externa reproduzir o restart; hoje são
+transitórios, pelo mesmo critério do `57P01`: a transação já foi desfeita pelo
+servidor, e repetir é seguro. O spec cobre os dois: a conexão encerrada entre
+dois comandos na `TransactionManager` real, e as rotas chamadas com
+`idle_in_transaction_session_timeout` de 1 ms, sem nenhuma resposta 500. O
+cliente cujo backend foi encerrado ainda pode voltar ao pool e falhar uma vez
+no uso seguinte, agora como 503, antes de ser descartado.
 
 **Concorrência na abertura.** Vinte `POST /wallets` simultâneos para o mesmo
 player e moeda resultam em um 201 e dezenove 409. O índice único serializa as
@@ -400,10 +554,15 @@ somente leitura também impede uma correção acidental. O adaptador compartilha
 com `execute` a tradução de erros de conexão.
 
 O caso de uso carrega a wallet e passa sua moeda ao gateway do extrato, sem
-nova consulta à wallet no repositório. Créditos e débitos são somados
-separadamente no SQL em `NUMERIC`, convertidos para `numeric(20,2)::text` e
-reconstruídos como `Money`. O saldo calculado nasce de `créditos.subtract(débitos)`,
-sem conversão monetária para `number` nem manipulação de sinal em strings.
+nova consulta à wallet no repositório. O saldo líquido do ledger é somado numa
+única agregação `NUMERIC` sem limite (créditos menos débitos) e só o resultado
+é convertido para `numeric(20,2)`; o SQL devolve o módulo e o sinal, e o
+domínio aplica `negate()`, sem conversão monetária para `number` nem
+manipulação de sinal em strings. Somar créditos e débitos em separado não
+serve: o giro acumulado passa da faixa mesmo com o saldo válido. Uma wallet no
+saldo máximo, com um BET e um WIN de 1,00, levava a reconciliação a 500 até
+uma avaliação externa reproduzir o caso; há teste para ele e para o ledger
+adulterado com soma negativa.
 O relatório calcula armazenado menos calculado, incluindo diferenças negativas.
 Wallet zero sem entradas soma zero.
 
@@ -497,7 +656,10 @@ saldo atual, porque responde ao pedido original.
 - **Limites de tamanho são de contrato.** `providerId` até 64 caracteres,
   `externalTransactionId`, `roundId` e `gameId` até 128, `Idempotency-Key` até
   255, com espaços nas pontas removidos. As colunas são `text`; o limite
-  protege índices e logs, e quem passa dele recebe `400`.
+  protege índices e logs, e quem passa dele recebe `400`. O mesmo contrato
+  recusa o caractere NUL, que o `text` do PostgreSQL não grava: antes ele
+  chegava ao banco e virava 500. Na fila, a mensagem vai para a DLQ com
+  `MESSAGE_INVALID`.
 
 O consumo da fila `wager-transactions.fifo` usa este mesmo caso de uso, com
 a inbox na mesma transação (seção 11).
@@ -944,7 +1106,8 @@ OpenTelemetry e dashboard são opcionais no enunciado e não foram feitos.
 | `inbox_duplicates_total` | counter | worker | duplicatas por entrega |
 | `wager_message_retries_total` | counter | worker | retries do consumo |
 | `outbox_publish_retries_total{event_type}`, `pending_reference_retries_total` | counter | worker | retries da outbox e das pendências |
-| `wager_messages_dead_lettered_total{failure_code}` | counter | worker | envios explícitos à DLQ |
+| `wager_messages_dead_lettered_total{failure_code}` | counter | worker | envios explícitos à DLQ confirmados pelo SQS |
+| `wager_message_settle_failures_total{action}` | counter | worker | ack, retry ou envio à DLQ que o SQS não confirmou; a mensagem volta no fim da visibilidade |
 | `wager_dlq_messages` | gauge | worker | mensagens na DLQ, inclusive as do redrive |
 | `lock_conflicts_total{reason}` | counter | API e worker | conflitos de lock |
 | `outbox_lag_seconds` | gauge | worker | outbox lag |
@@ -952,6 +1115,12 @@ OpenTelemetry e dashboard são opcionais no enunciado e não foram feitos.
 | `wager_message_processing_seconds{outcome}` | histograma | worker | latência do consumo |
 | `outbox_published_total`, `outbox_publish_failures_total`, `pending_reference_transactions`, `pending_reference_resolved_total`, `wallet_reconciliation_divergences_total` | vários | ver seções 7, 9 e 10 | |
 
+- **Mensagens contam depois que o SQS confirma.** O desfecho de uma mensagem
+  (processada, duplicata, retry ou DLQ) só entra nas métricas quando o
+  `DeleteMessage`, o `ChangeMessageVisibility` ou o envio à DLQ dá certo. Se o
+  SQS falha, conta em `wager_message_settle_failures_total`. Antes, uma DLQ
+  inalcançável aparecia como mensagem enviada, até uma avaliação externa
+  mostrar o caso; o teste aponta a DLQ para uma fila que não existe.
 - **Transações contam depois do commit.** O submit, o registro de `FAILED` e o
   resolver avisam o `WagerTransactionMonitor` só depois que a transação
   confirma; uma tentativa desfeita (a corrida perdida pela chave, por exemplo)
@@ -983,3 +1152,89 @@ Logs JSON, sem corpo de requisição, valor monetário, saldo ou URL de conexão
 Os testes conferem, na API real em processo separado, que toda linha do stdout
 é JSON e que o valor enviado não aparece; e que o log de transação tem
 exatamente os campos acima.
+
+## 13. Autenticação
+
+**Decisão: não integrar um Identity Provider agora.** O §2 diz que
+autenticação não vale pontos e não deve competir com correção financeira,
+concorrência e idempotência, e aceita não implementar desde que a decisão, o
+desenho e um ponto de extensão explícito estejam presentes. Se implementada, a
+expectativa é um IdP externo, nunca tabela própria de usuários com hash de
+senha nem token assinado pela aplicação.
+
+**Ponto de extensão no código.** Toda requisição HTTP passa pelo `AuthGuard`,
+registrado como `APP_GUARD`. O guard deixa passar o que tem `@Public()` e
+pergunta à `RequestAuthenticator` sobre o resto. Hoje a única implementação é
+a `AnonymousAuthenticator`, que autoriza tudo.
+
+- **Guard global com `@Public()`, e não `@UseGuards` por rota.** Uma rota nova
+  já nasce protegida; esquecer o decorator fecha uma rota, nunca abre. Só os
+  health checks são públicos, como o §2 manda. `/metrics` fica protegido: o
+  Prometheus envia bearer token no scrape quando o IdP existir, e a porta de
+  métricas do worker é interna.
+- **A porta existe para o guard ser testável.** Com um guard que devolvesse
+  `true` nos dois ramos, o `@Public()` não teria efeito observável e o ramo
+  seria código morto. O e2e troca o autenticador por um que recusa tudo e
+  prova que as rotas de negócio e `/metrics` respondem 403 antes do banco, que
+  os health checks não consultam o autenticador, e que, com o autenticador de
+  produção, a requisição chega ao caso de uso. As mutações "guard não global",
+  "health sem `@Public()`" e "guard ignora o metadado" derrubam esse teste.
+- **A recusa usa o 403 do Nest** (`canActivate` falso), com o envelope de erro
+  e `REQUEST_INVALID`. Os códigos `UNAUTHENTICATED` (401) e `PROVIDER_FORBIDDEN`
+  (403) nascem com o IdP, porque só ele os lança (seção 3).
+
+**Desenho que seria adotado:**
+
+1. Keycloak no compose, com um client confidencial por provedor e o fluxo
+   `client_credentials`: o provedor é uma máquina, não um usuário.
+2. Uma `JwksRequestAuthenticator` no lugar da anônima: valida assinatura,
+   `iss`, `aud` e `exp` contra o JWKS do realm, com cache das chaves, e
+   responde 401 sem token ou com token inválido.
+3. O `azp` do token vira o `providerId` autorizado. Uma transação cujo
+   `providerId` no corpo seja outro responde 403, antes do caso de uso.
+4. A fila continua como canal interno confiável (§2), e o `providerId` da
+   mensagem passa pelas mesmas validações de domínio de hoje, como o
+   `internal` reservado.
+
+O que muda para ligar: a implementação da `RequestAuthenticator`, a
+configuração do realm e o serviço do Keycloak no compose. Domínio, casos de
+uso e controllers não mudam.
+
+## 14. Trade-offs e limitações
+
+O que escolhemos pagar, e o que ficou de fora. Os detalhes estão na seção
+indicada.
+
+**Trade-offs assumidos**
+
+| Escolha | Custo | Seção |
+|---|---|---|
+| Lock pessimista por wallet | a hot wallet é serial: 61 a 76 op/s no teste de carga; acima da capacidade, 503 rápido com `Retry-After`, sem efeito | 6, `docs/load-test.md` |
+| Uma mensagem por `ReceiveMessage` | duas idas ao SQS por mensagem; a fila fez 104 a 129 mensagens/s contra 280 a 400 op/s da HTTP no mesmo ambiente | 11 |
+| Contrato estrito na fila | um campo novo do produtor vai para a DLQ até o contrato mudar | 11 |
+| `FAILED` terminal | reprocessar da DLQ não reaplica; o provedor reenvia com outra chave | 11 |
+| Outbox at-least-once, sem limite de tentativas | sob carga o lag chegou a 21 s e zerou depois; o consumidor de eventos deduplica por `eventId` | 9 |
+| Camadas, portas e factories | mais arquivos por operação; em troca, fronteiras impostas pelo lint e casos de uso testáveis sem infraestrutura | 1 |
+
+**Limitações conhecidas**
+
+- **Sem Identity Provider.** O ponto de extensão existe e é testado; o desenho
+  com Keycloak está descrito (seção 13).
+- **Uma falha a mais por queda de conexão.** O cliente do `pg` cujo backend foi
+  encerrado volta ao pool e falha uma vez, como 503, antes de ser descartado
+  (seção 6).
+- **Override do kysely 0.29.7** até o MikroORM depender dessa versão (seção 6).
+- **Conexões:** processos × `DATABASE_POOL_MAX` precisa caber no
+  `max_connections`; acima disso, o caminho é um PgBouncer, que não está no
+  compose (seção 6).
+- **Reverter migrations com dados.** A `Migration20261024000004OutboxOrdering`
+  só com a outbox drenada (issue #10, aberta), e a
+  `Migration20261025000005WagerReversals` substitui as correlações originais
+  pelo id da transação (seções 9 e 10).
+- **Métricas por processo.** Contadores reiniciam com o processo, e as gauges
+  de pendências e de DLQ observam o total, não devem ser somadas entre
+  instâncias (seções 10 e 12). `OPENING` fica fora de `wager_transactions_total`.
+- **Teste de carga numa máquina só**, com SQS emulado: os números comparam
+  cenários, não medem capacidade de produção (`docs/load-test.md`).
+- **Windows.** Os testes de `SIGTERM` só rodam em Linux, e fora de container o
+  processo sai com 143 (seção 4).

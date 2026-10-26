@@ -2,7 +2,7 @@ import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import type { Server } from 'node:http';
 
-export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 
 @Injectable()
 export class HttpKeepAlive implements OnApplicationBootstrap {
