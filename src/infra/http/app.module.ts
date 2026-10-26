@@ -9,6 +9,7 @@ import { RuntimeModule } from '../runtime/runtime.module';
 import { HealthModule } from './health/health.module';
 import { CorrelationInterceptor } from './shared/correlation.interceptor';
 import { HttpErrorFilter } from './shared/errors/http-error.filter';
+import { HttpKeepAlive } from './shared/http-keep-alive';
 import { WageringModule } from './wagering/wagering.module';
 import { WalletModule } from './wallet/wallet.module';
 
@@ -26,6 +27,7 @@ import { WalletModule } from './wallet/wallet.module';
   providers: [
     { provide: APP_FILTER, useClass: HttpErrorFilter },
     { provide: APP_INTERCEPTOR, useClass: CorrelationInterceptor },
+    HttpKeepAlive,
   ],
 })
 export class AppModule implements OnApplicationShutdown {
