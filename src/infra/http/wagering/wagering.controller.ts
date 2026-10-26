@@ -20,14 +20,13 @@ import {
   idempotencyKey,
   submitWagerTransactionContract,
 } from '../../contract/wager-transaction.contract';
+import { WAGERING_USE_CASES } from '../../wagering/wagering-use-cases.module';
 import { CorrelationId } from '../shared/correlation-id.decorator';
 import { parseRequest } from '../shared/validation/parse-request';
 import {
   providerTransactionParams,
   transactionIdParam,
 } from './wagering.request';
-
-export const WAGERING_USE_CASES = Symbol('WAGERING_USE_CASES');
 
 @Controller()
 export class WageringController {

@@ -59,6 +59,7 @@ PR não é aprovado.
 | Contrato de entrada usado por mais de um canal (HTTP e fila) | `src/infra/contract/<nome>.contract.ts` | schemas zod estritos | `infra/contract/wager-transaction.contract.ts` |
 | Documento além de README e ARCHITECTURE | `docs/<nome>.md` | — | `docs/load-test.md` |
 | Montagem do contexto | `src/modules/<ctx>/factory/<ctx>.factory.ts` | `const <Ctx>Factory = { create(...) }` | `wallet/factory/wallet.factory.ts` |
+| Casos de uso montados para mais de um processo (API e worker) | `src/infra/<ctx>/<ctx>-use-cases.module.ts` | o token e o módulo Nest que chama a factory, importado pelos dois | `infra/wagering/wagering-use-cases.module.ts` |
 | Rota HTTP | `src/infra/http/<ctx>/<ctx>.controller.ts`, `.module.ts`, `.request.ts` | controller sem regra, só `parseRequest` e caso de uso | `infra/http/wallet/` |
 | Peça transversal da API | `src/infra/http/shared/<nome>.ts`, agrupada em subpasta quando forem várias do mesmo tema | interceptor, filtro, decorator, middleware ou provider de ciclo, registrado no `AppModule`; o que precisa rodar antes do body parser entra em `configureHttpApplication`, chamada pelo `main.ts` e pelos testes | `infra/http/shared/correlation.interceptor.ts`, `infra/http/shared/configure-http-application.ts` |
 | Ciclo de worker | `src/infra/worker/<nome>-worker.ts` | `@Injectable` com `OnModuleInit`/`OnModuleDestroy` | `infra/worker/outbox-worker.ts` |
