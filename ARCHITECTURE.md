@@ -494,8 +494,10 @@ métricas se isso mudar. Timeout e deadlock reais têm teste.
 200) chega ao `pg.Pool`. Sem ele valia o padrão do driver, 10, e com dez
 leitores da fila ocupados a outbox e o resolver recebiam
 `timeout exceeded when trying to connect` em 1 s, porque o
-`connectionTimeoutMillis` também limita a fila de espera do pool. A
-configuração recusa `CONSUMER_CONCURRENCY + 3 > DATABASE_POOL_MAX`: cada leitor
+`connectionTimeoutMillis` também limita a fila de espera do pool. O worker
+recusa subir com `CONSUMER_CONCURRENCY + 3 > DATABASE_POOL_MAX`; a API, que não
+consome a fila, sobe com qualquer pool válido. Antes a regra valia para os dois
+processos, e uma API com pool menor que 13 não subia. Cada leitor
 segura no máximo uma conexão, e outbox, resolver e readiness rodam em sequência,
 uma conexão cada. O padrão 15 é o que o worker precisa (10 + 3) mais folga de
 2. Medimos o pico na suíte inteira: 42 conexões com pool 10, 82 com pool 20 e

@@ -16,7 +16,7 @@ import type { InboxDelivery } from '../../modules/@shared/domain/inbox/inbox-mes
 import { payloadHash } from '../../modules/@shared/domain/payload-hash';
 import type { RecordFailedWagerTransactionUseCaseInterface } from '../../modules/wagering/usecase/record-failure/record-failure.usecase.dto';
 import type { SubmitWagerTransactionUseCaseInterface } from '../../modules/wagering/usecase/submit/submit.usecase.dto';
-import type { AppConfig } from '../config/app-config';
+import { type AppConfig, assertWorkerConfig } from '../config/app-config';
 import { APP_CONFIG } from '../config/config.module';
 import {
   wagerTransactionMessageContract,
@@ -85,7 +85,9 @@ export class WagerMessageWorker implements OnModuleInit, OnModuleDestroy {
     @Inject(WAGER_CONSUMER_MONITOR)
     private readonly monitor: WagerConsumerMonitor,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
-  ) {}
+  ) {
+    assertWorkerConfig(config);
+  }
 
   onModuleInit(): void {
     this.current = this.run();

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { Registry } from 'prom-client';
 
+import { InvalidConfigError } from '../../../src/infra/config/app-config';
+import type { WagerQueue } from '../../../src/infra/queue/wager-queue';
 import { OutboxWorker } from '../../../src/infra/worker/outbox-worker';
 import { PendingReferenceWorker } from '../../../src/infra/worker/pending-reference-worker';
+import { WagerMessageWorker } from '../../../src/infra/worker/wager-message-worker';
 import { eventually } from '../../support/async';
 import { testAppConfig } from '../../support/http-app';
 
@@ -51,5 +54,23 @@ describe('workers de polling', () => {
     } finally {
       await worker.onModuleDestroy();
     }
+  });
+});
+
+describe('consumidor da fila', () => {
+  it('recusa subir com concorrência que esgotaria o pool do banco', () => {
+    const unused = () => {
+      throw new Error('não deveria ser chamado');
+    };
+    expect(
+      () =>
+        new WagerMessageWorker(
+          {} as WagerQueue,
+          unused,
+          unused,
+          { handled: unused, settleFailed: unused },
+          { ...testAppConfig(), databasePoolMax: 5, consumerConcurrency: 3 },
+        ),
+    ).toThrow(InvalidConfigError);
   });
 });

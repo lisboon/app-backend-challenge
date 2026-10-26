@@ -220,7 +220,7 @@ curl http://127.0.0.1:3001/metrics
 | `WAGER_QUEUE_NAME` e `WAGER_DLQ_NAME` | Obrigatórias; filas de entrada e DLQ, com nome FIFO |
 | `CONSUMER_CONCURRENCY` | `10`; de 1 a 100 leitores da fila por worker, cada um com uma mensagem por vez |
 | `CONSUMER_RETRY_BASE_SECONDS` | `2`; de 1 a 300, base do backoff da mensagem com falha transitória |
-| `DATABASE_POOL_MAX` | `15`; de 2 a 200 conexões por processo; precisa deixar 3 além de `CONSUMER_CONCURRENCY`, e a soma entre processos não pode passar do `max_connections` do PostgreSQL |
+| `DATABASE_POOL_MAX` | `15`; de 2 a 200 conexões por processo; no worker, precisa deixar 3 além de `CONSUMER_CONCURRENCY`, e a soma entre processos não pode passar do `max_connections` do PostgreSQL |
 | `EVENTS_QUEUE_NAME` | Obrigatória; `.env.example` usa `wallet-events.fifo`. Deve ser um nome FIFO; configura também o hook do LocalStack |
 | `OUTBOX_POLL_INTERVAL_MS` | `500`; inteiro de 1 a 2147483647, intervalo entre ciclos do publicador |
 | `PENDING_REFERENCE_TTL_SECONDS` | `3600`; prazo desde createdAt para rejeitar uma referência ainda inexistente; mesmo valor na API e no worker |
