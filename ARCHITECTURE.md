@@ -670,7 +670,11 @@ saldo atual, porque responde ao pedido original.
   protege índices e logs, e quem passa dele recebe `400`. O mesmo contrato
   recusa o caractere NUL, que o `text` do PostgreSQL não grava: antes ele
   chegava ao banco e virava 500. Na fila, a mensagem vai para a DLQ com
-  `MESSAGE_INVALID`.
+  `MESSAGE_INVALID`. Recusa também U+FFFE e U+FFFF: o `JSON.stringify` não
+  os escapa, e o SQS não os aceita no corpo da mensagem. Um evento com eles
+  falharia a publicação para sempre e seguraria os eventos seguintes da wallet.
+  O LocalStack aceita os dois, então a prova fica no contrato, que também
+  confere que controle, surrogate solto, U+FFFD e U+10FFFF continuam aceitos.
 
 O consumo da fila `wager-transactions.fifo` usa este mesmo caso de uso, com
 a inbox na mesma transação (seção 11).

@@ -4,7 +4,10 @@ import { uuid } from './uuid.contract';
 
 const storableText = z
   .string()
-  .regex(/^[^\0]*$/, 'texto não pode conter o caractere NUL');
+  .regex(
+    /^[^\0\uFFFE\uFFFF]*$/,
+    'texto não pode conter NUL, U+FFFE nem U+FFFF',
+  );
 
 export const providerId = storableText.min(1).max(64);
 

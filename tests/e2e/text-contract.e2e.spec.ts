@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 
 import { startApp } from '../support/http-app';
 
-describe('texto que o PostgreSQL não grava, sem infraestrutura', () => {
+describe('texto que o PostgreSQL ou o SQS recusam, sem infraestrutura', () => {
   let app: INestApplication;
   let baseUrl: string;
 
@@ -17,13 +17,10 @@ describe('texto que o PostgreSQL não grava, sem infraestrutura', () => {
     await app.close();
   });
 
-  it.each([
-    'providerId',
-    'externalTransactionId',
-    'roundId',
-    'gameId',
-    'referenceExternalTransactionId',
-  ])('NUL em %s responde 400 antes do banco', async (field) => {
+  const submitWith = async (
+    field: string,
+    text: string,
+  ): Promise<{ status: number; failureCode: unknown }> => {
     const response = await fetch(`${baseUrl}/wagering/transactions`, {
       method: 'POST',
       headers: {
@@ -39,13 +36,26 @@ describe('texto que o PostgreSQL não grava, sem infraestrutura', () => {
         gameId: 'game-1',
         kind: 'WIN',
         money: { amount: '1.00', currency: 'BRL' },
-        [field]: 'a\u0000b',
+        [field]: text,
       }),
     });
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      failureCode: 'REQUEST_INVALID',
-    });
+    const body = (await response.json()) as { failureCode?: unknown };
+    return { status: response.status, failureCode: body.failureCode };
+  };
+
+  it.each([
+    'providerId',
+    'externalTransactionId',
+    'roundId',
+    'gameId',
+    'referenceExternalTransactionId',
+  ])('NUL e U+FFFF em %s respondem 400 antes do banco', async (field) => {
+    for (const text of ['a\u0000b', 'a\uFFFFb']) {
+      expect(await submitWith(field, text)).toEqual({
+        status: 400,
+        failureCode: 'REQUEST_INVALID',
+      });
+    }
   });
 });

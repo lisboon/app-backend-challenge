@@ -94,4 +94,28 @@ describe('contrato da mensagem WagerTransactionRequested', () => {
   it('recusa o caractere NUL no messageId', () => {
     expect(accepts({ ...message, messageId: 'msg\u0000123' })).toBe(false);
   });
+
+  it.each([
+    ['U+FFFE', '\uFFFE'],
+    ['U+FFFF', '\uFFFF'],
+  ])(
+    'recusa %s, que o JSON não escapa e o SQS não aceita no corpo do evento',
+    (_name, character) => {
+      expect(
+        accepts({ ...message, data: { ...data, roundId: `a${character}b` } }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ['U+0001', '\u0001'],
+    ['U+001F', '\u001F'],
+    ['surrogate solto', '\uD800'],
+    ['U+FFFD', '\uFFFD'],
+    ['U+10FFFF', '\u{10FFFF}'],
+  ])('aceita %s, que o JSON escapa ou o SQS aceita', (_name, character) => {
+    expect(
+      accepts({ ...message, data: { ...data, roundId: `a${character}b` } }),
+    ).toBe(true);
+  });
 });
