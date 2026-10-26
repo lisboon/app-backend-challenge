@@ -469,8 +469,18 @@ aparece nos dois casos:
 | `23505` em `wager_tx_idempotency_uk` | nova tentativa do submit, que encontra a transação gravada (seção 8) |
 | `23505` em `wager_tx_external_uk` | `EXTERNAL_TRANSACTION_CONFLICT` (409) |
 | `23505` em `wager_tx_single_reversal_uk` | `REFERENCE_ALREADY_REVERSED`; o submit refaz uma tentativa e registra a rejeição de negócio (422) |
-| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `25P03` (sessão ociosa encerrada no meio da transação), `57P01`–`57P03`, timeout de conexão do pool, cliente do `pg` que perdeu a conexão ("is not queryable", sem código), `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
+| `ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, classe `08`, `25P03` (sessão ociosa encerrada no meio da transação), `57P01`–`57P03`, `57014` (query cancelada), classe `53` (servidor sem recurso: conexões esgotadas, memória, disco), `EHOSTUNREACH`, `ENETUNREACH`, timeout de conexão do pool, cliente do `pg` que perdeu a conexão ("is not queryable", sem código), `55P03` (lock não obtido), `40001`, `40P01` | `INFRASTRUCTURE_UNAVAILABLE` (503 + `Retry-After`) |
 | qualquer outro | 500, porque é defeito, não condição de negócio |
+
+**Recurso esgotado e query cancelada também passam.** `53300` (conexões
+esgotadas no servidor), o resto da classe `53` e `57014` (query cancelada por
+`statement_timeout` ou pelo operador) desfazem a transação inteira, e repetir
+é seguro. Antes, eles viravam 500 na HTTP e, na fila, transformavam uma aposta
+válida em `FAILED` permanente, até as revisões do projeto mostrarem o caso. O
+teste cancela no servidor uma aposta que espera o lock da wallet e confere 503
+sem nada gravado. `25006` e `08P01` continuam 500: aqui o primeiro só nasce de
+escrita dentro do `snapshot` de leitura, e o segundo é violação de protocolo;
+repetir não muda nenhum dos dois.
 
 **Conflitos de lock são contados antes da tradução.** O `55P03` (lock não
 obtido), o `40P01` (deadlock) e o `40001` (serialização) incrementam

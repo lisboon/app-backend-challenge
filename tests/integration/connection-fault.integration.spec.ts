@@ -158,6 +158,26 @@ describe('queda de conexão do banco dentro da transação', () => {
     30_000,
   );
 
+  it('query cancelada pelo servidor responde 503 sem gravar a transação', async () => {
+    const placed = bet();
+    const outcome = await dropConnectionsWaitingOn(
+      orm,
+      'wallets',
+      () => call('POST', '/wagering/transactions', placed, uuid()),
+      'cancel',
+    );
+
+    expect(outcome.dropped).toBe(1);
+    expect(outcome.result).toBe(503);
+    const [row] = await orm.em
+      .fork()
+      .execute<{ n: string }[]>(
+        'select count(*) as n from wager_transactions where external_transaction_id = ?',
+        [placed.externalTransactionId],
+      );
+    expect(Number(row.n)).toBe(0);
+  });
+
   it('worker volta a publicar a outbox e a consumir a fila depois de quedas nos ciclos', async () => {
     const sqs = testSqs();
     const events = await eventsQueue(sqs);

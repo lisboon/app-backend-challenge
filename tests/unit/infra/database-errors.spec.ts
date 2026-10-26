@@ -48,6 +48,14 @@ describe('isTransientFailure', () => {
       ),
     ],
     ['cliente já fechado', new Error('Client was closed and is not queryable')],
+    ['servidor sem recurso', { code: '53000' }],
+    ['disco cheio', { code: '53100' }],
+    ['servidor sem memória', { code: '53200' }],
+    ['conexões esgotadas no servidor', { code: '53300' }],
+    ['limite de configuração excedido', { code: '53400' }],
+    ['query cancelada', { code: '57014' }],
+    ['host inalcançável', { code: 'EHOSTUNREACH' }],
+    ['rede inalcançável', { code: 'ENETUNREACH' }],
   ])('%s é transitório', (_caso, error) => {
     expect(isTransientFailure(error)).toBe(true);
   });
@@ -55,6 +63,8 @@ describe('isTransientFailure', () => {
   it.each([
     { code: '23505' },
     { code: '22021' },
+    { code: '25006' },
+    { code: '08P01' },
     new Error('invariante violada'),
   ])('erro que não é de conexão continua interno: %p', (error) => {
     expect(isTransientFailure(error)).toBe(false);
