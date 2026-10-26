@@ -11,6 +11,7 @@ import type {
   PendingReferenceMonitor,
   PendingReferenceOutcome,
 } from '../../gateway/pending-reference-monitor.gateway';
+import type { WagerTransactionMonitor } from '../../gateway/wager-transaction-monitor.gateway';
 import type {
   PendingWagerTransaction,
   WagerTransactionGateway,
@@ -31,6 +32,7 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
     private readonly settlement: WagerTransactionSettlement,
     private readonly clock: Clock,
     private readonly monitor: PendingReferenceMonitor,
+    private readonly wagerMonitor: WagerTransactionMonitor,
   ) {}
 
   async execute(
@@ -122,6 +124,7 @@ export class ResolvePendingWagerTransactionsUseCase implements ResolvePendingWag
       return;
     }
     this.monitor.resolved(transaction, outcomeOf(transaction));
+    this.wagerMonitor.recorded(transaction);
   }
 }
 

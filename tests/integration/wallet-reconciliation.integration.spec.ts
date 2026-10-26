@@ -207,6 +207,7 @@ describe('reconciliação com infraestrutura real', () => {
       .sort();
     expect(families).toEqual([
       'http_request_duration_seconds',
+      'idempotent_replays_total',
       'outbox_lag_seconds',
       'outbox_publish_failures_total',
       'outbox_publish_retries_total',
@@ -214,6 +215,7 @@ describe('reconciliação com infraestrutura real', () => {
       'pending_reference_resolved_total',
       'pending_reference_retries_total',
       'pending_reference_transactions',
+      'wager_transactions_total',
       'wallet_reconciliation_divergences_total',
     ]);
     const other = await startApp();

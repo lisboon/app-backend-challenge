@@ -31,6 +31,7 @@ import { startApp } from '../support/http-app';
 import { eventsQueue, receiveEvents, testSqs } from '../support/outbox';
 import { freePort, spawnWorker, testAppEnv } from '../support/process';
 import { retryTransient } from '../support/retry-transient';
+import { RecordingWagerMonitor } from '../support/wager-monitor';
 
 type Wallet = { walletId: string; playerId: string };
 type Body = Omit<
@@ -184,6 +185,7 @@ describe('referências pendentes com PostgreSQL e LocalStack reais', () => {
       ids: { next: uuid },
       clock: { now: () => now },
       pendingMonitor: monitor,
+      wagerMonitor: new RecordingWagerMonitor(),
       pendingReferenceTtlSeconds: ttl,
     }).resolvePending.execute({ limit: 100 });
   const bet = async (wallet: Wallet, externalTransactionId: string) => {

@@ -27,6 +27,7 @@ import {
 } from '../support/database';
 import { startApp, testAppConfig } from '../support/http-app';
 import { testSqs } from '../support/outbox';
+import { RecordingWagerMonitor } from '../support/wager-monitor';
 import {
   approximateMessages,
   receiveDeadLetters,
@@ -77,6 +78,7 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
       ids: { next: uuid },
       clock: { now: () => new Date() },
       pendingMonitor: silentMonitor,
+      wagerMonitor: new RecordingWagerMonitor(),
       pendingReferenceTtlSeconds: 3600,
     });
   });

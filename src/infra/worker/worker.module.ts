@@ -12,6 +12,7 @@ import {
   type WageringUseCases,
 } from '../../modules/wagering/factory/wagering.factory';
 import type { PendingReferenceMonitor } from '../../modules/wagering/gateway/pending-reference-monitor.gateway';
+import type { WagerTransactionMonitor } from '../../modules/wagering/gateway/wager-transaction-monitor.gateway';
 import type { ResolvePendingWagerTransactionsUseCase } from '../../modules/wagering/usecase/resolve-pending/resolve-pending.usecase';
 import type { AppConfig } from '../config/app-config';
 import { APP_CONFIG, ConfigModule } from '../config/config.module';
@@ -23,6 +24,7 @@ import {
   ObservabilityModule,
   OUTBOX_MONITOR,
   PENDING_REFERENCE_MONITOR,
+  WAGER_TRANSACTION_MONITOR,
 } from '../observability/observability.module';
 import { QueueModule } from '../queue/queue.module';
 import { SqsEventPublisher } from '../queue/sqs-event-publisher';
@@ -60,6 +62,7 @@ const WAGERING_USE_CASES = Symbol('WAGERING_USE_CASES');
         ID_GENERATOR,
         CLOCK,
         PENDING_REFERENCE_MONITOR,
+        WAGER_TRANSACTION_MONITOR,
         APP_CONFIG,
       ],
       useFactory: (
@@ -67,6 +70,7 @@ const WAGERING_USE_CASES = Symbol('WAGERING_USE_CASES');
         ids: IdGenerator,
         clock: Clock,
         pendingMonitor: PendingReferenceMonitor,
+        wagerMonitor: WagerTransactionMonitor,
         config: AppConfig,
       ): WageringUseCases =>
         WageringFactory.create({
@@ -74,6 +78,7 @@ const WAGERING_USE_CASES = Symbol('WAGERING_USE_CASES');
           ids,
           clock,
           pendingMonitor,
+          wagerMonitor,
           pendingReferenceTtlSeconds: config.pendingReferenceTtlSeconds,
         }),
     },

@@ -28,6 +28,7 @@ import type {
 import { SubmitWagerTransactionUseCase } from '../../../src/modules/wagering/usecase/submit/submit.usecase';
 import type { SubmitWagerTransactionUseCaseInputDto } from '../../../src/modules/wagering/usecase/submit/submit.usecase.dto';
 import { WagerTransactionSettlement } from '../../../src/modules/wagering/usecase/wager-transaction-settlement';
+import { RecordingWagerMonitor } from '../../support/wager-monitor';
 
 const at = new Date('2026-10-24T12:00:00.000Z');
 const brl = (amount: string): Money => Money.from({ amount, currency: 'BRL' });
@@ -215,8 +216,10 @@ describe('SubmitWagerTransactionUseCase', () => {
   let wagers: FakeWagers;
   let transactions: FakeTransactions;
   let useCase: SubmitWagerTransactionUseCase;
+  let monitor: RecordingWagerMonitor;
 
   beforeEach(() => {
+    monitor = new RecordingWagerMonitor();
     wallets = new FakeWallets();
     wagers = new FakeWagers();
     outbox = new FakeOutbox();
@@ -231,6 +234,7 @@ describe('SubmitWagerTransactionUseCase', () => {
       ids,
       clock,
       new WagerTransactionSettlement(wagers, ids, clock, outbox, 3600),
+      monitor,
     );
   });
 
@@ -262,6 +266,10 @@ describe('SubmitWagerTransactionUseCase', () => {
     expect(wagers.stored.map((t) => t.status)).toEqual([
       WagerTransactionStatus.Processed,
     ]);
+    expect(monitor.recordings).toEqual([
+      { status: WagerTransactionStatus.Processed, transactionId: 'id-1' },
+    ]);
+    expect(monitor.replays).toEqual([]);
   });
 
   it('WIN credita', async () => {
@@ -293,6 +301,9 @@ describe('SubmitWagerTransactionUseCase', () => {
     });
     expect(wallets.applied).toHaveLength(0);
     expect(wagers.stored).toHaveLength(1);
+    expect(monitor.recordings.map((r) => r.status)).toEqual([
+      WagerTransactionStatus.Rejected,
+    ]);
   });
 
   it('wallet inexistente falha sem gravar', async () => {
@@ -302,6 +313,7 @@ describe('SubmitWagerTransactionUseCase', () => {
       await useCase.execute(input()).catch((error: unknown) => error),
     ).toBeInstanceOf(WalletNotFoundError);
     expect(wagers.stored).toHaveLength(0);
+    expect(monitor.recordings).toEqual([]);
   });
 
   it('pedido inválido falha antes de abrir transação', async () => {
@@ -323,6 +335,13 @@ describe('SubmitWagerTransactionUseCase', () => {
 
     expect(replay).toEqual({ ...first, idempotentReplay: true });
     expect(wallets.applied).toHaveLength(2);
+    expect(monitor.recordings).toHaveLength(2);
+    expect(monitor.replays).toEqual([
+      {
+        status: WagerTransactionStatus.Processed,
+        transactionId: first.transactionId,
+      },
+    ]);
   });
 
   it('mesma chave com outro payload é conflito', async () => {
@@ -333,6 +352,8 @@ describe('SubmitWagerTransactionUseCase', () => {
         .execute(input({ money: { amount: '31.00', currency: 'BRL' } }))
         .catch((error: unknown) => error),
     ).toBeInstanceOf(IdempotencyPayloadConflictError);
+    expect(monitor.recordings).toHaveLength(1);
+    expect(monitor.replays).toEqual([]);
   });
 
   it('perdendo a corrida pela chave, refaz uma vez e devolve o vencedor', async () => {
@@ -359,6 +380,10 @@ describe('SubmitWagerTransactionUseCase', () => {
     });
     expect(transactions.executions).toBe(2);
     expect(wallets.balance.toString()).toBe('100.00');
+    expect(monitor.recordings).toEqual([]);
+    expect(monitor.replays).toEqual([
+      { status: WagerTransactionStatus.Processed, transactionId: 'winner' },
+    ]);
   });
 
   it('refaz só uma vez', async () => {

@@ -15,6 +15,7 @@ import {
   openTestOrm,
 } from '../support/database';
 import { startApp } from '../support/http-app';
+import { RecordingWagerMonitor } from '../support/wager-monitor';
 
 const uuid = (): string => Bun.randomUUIDv7();
 const brl = (amount: string) => ({ amount, currency: 'BRL' });
@@ -24,6 +25,7 @@ describe('registro de FAILED com PostgreSQL real', () => {
   let app: INestApplication;
   let baseUrl: string;
   let useCases: WageringUseCases;
+  const monitor = new RecordingWagerMonitor();
 
   beforeAll(async () => {
     orm = await openTestOrm();
@@ -39,6 +41,7 @@ describe('registro de FAILED com PostgreSQL real', () => {
         retryScheduled: () => undefined,
         failed: () => undefined,
       },
+      wagerMonitor: monitor,
       pendingReferenceTtlSeconds: 3600,
     });
   });
@@ -102,6 +105,10 @@ describe('registro de FAILED com PostgreSQL real', () => {
     const { transactionId } = await recordFailure(data);
 
     expect(transactionId).not.toBeNull();
+    expect(monitor.recordings.at(-1)).toEqual({
+      status: 'FAILED',
+      transactionId: String(transactionId),
+    });
     expect(
       await useCases.findById.execute({ id: transactionId ?? '' }),
     ).toMatchObject({ status: 'FAILED', failureCode: 'PROCESSING_FAILED' });
@@ -134,7 +141,9 @@ describe('registro de FAILED com PostgreSQL real', () => {
     const data = input(wallet);
     const processed = await useCases.submit.execute(data);
 
+    const reported = monitor.recordings.length;
     expect(await recordFailure(data)).toEqual({ transactionId: null });
+    expect(monitor.recordings).toHaveLength(reported);
     expect(
       await useCases.findById.execute({
         id: processed.transactionId,

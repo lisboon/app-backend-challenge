@@ -19,6 +19,7 @@ import {
   ledgerMatchesBalance,
 } from '../support/database';
 import { startApp } from '../support/http-app';
+import { RecordingWagerMonitor } from '../support/wager-monitor';
 
 const uuid = (): string => Bun.randomUUIDv7();
 const money = (amount: string) => ({ amount, currency: 'BRL' });
@@ -232,6 +233,7 @@ describe('eventos financeiros atômicos na outbox', () => {
           failing,
           3600,
         ),
+        new RecordingWagerMonitor(),
       );
       expect(
         await useCase
@@ -301,6 +303,7 @@ describe('eventos financeiros atômicos na outbox', () => {
           gateway,
           3600,
         ),
+        new RecordingWagerMonitor(),
       );
     const first = make(holding, realWallets).execute({
       ...body(wallet),

@@ -5,11 +5,15 @@ import { MetricsController } from './metrics.controller';
 import { PrometheusOutboxMonitor } from './outbox-monitor';
 import { PrometheusPendingReferenceMonitor } from './pending-reference-monitor';
 import { PrometheusReconciliationMonitor } from './reconciliation-monitor';
+import { PrometheusWagerTransactionMonitor } from './wager-transaction-monitor';
 
 export const OUTBOX_MONITOR = Symbol('OUTBOX_MONITOR');
 export const PENDING_REFERENCE_MONITOR = Symbol('PENDING_REFERENCE_MONITOR');
 
 export const RECONCILIATION_MONITOR = Symbol('RECONCILIATION_MONITOR');
+
+export const WAGER_TRANSACTION_MONITOR = Symbol('WAGER_TRANSACTION_MONITOR');
+
 @Global()
 @Module({
   controllers: [MetricsController],
@@ -28,6 +32,12 @@ export const RECONCILIATION_MONITOR = Symbol('RECONCILIATION_MONITOR');
     },
     { provide: Registry, useFactory: (): Registry => new Registry() },
     {
+      provide: WAGER_TRANSACTION_MONITOR,
+      inject: [Registry],
+      useFactory: (registry: Registry): PrometheusWagerTransactionMonitor =>
+        new PrometheusWagerTransactionMonitor(registry),
+    },
+    {
       provide: RECONCILIATION_MONITOR,
       inject: [Registry],
       useFactory: (registry: Registry): PrometheusReconciliationMonitor =>
@@ -39,6 +49,7 @@ export const RECONCILIATION_MONITOR = Symbol('RECONCILIATION_MONITOR');
     RECONCILIATION_MONITOR,
     OUTBOX_MONITOR,
     PENDING_REFERENCE_MONITOR,
+    WAGER_TRANSACTION_MONITOR,
   ],
 })
 export class ObservabilityModule {}

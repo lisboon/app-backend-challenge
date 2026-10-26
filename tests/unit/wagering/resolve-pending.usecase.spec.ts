@@ -14,6 +14,7 @@ import type { WagerTransactionGateway } from '../../../src/modules/wagering/gate
 import type { WalletMovementGateway } from '../../../src/modules/wagering/gateway/wallet-movement.gateway';
 import { ResolvePendingWagerTransactionsUseCase } from '../../../src/modules/wagering/usecase/resolve-pending/resolve-pending.usecase';
 import { WagerTransactionSettlement } from '../../../src/modules/wagering/usecase/wager-transaction-settlement';
+import { RecordingWagerMonitor } from '../../support/wager-monitor';
 
 class FakeContext extends TransactionContext {
   constructor() {
@@ -39,6 +40,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
   let trace: string[];
   let events: OutboxMessage[];
   let resolver: ResolvePendingWagerTransactionsUseCase;
+  let wagerMonitor: RecordingWagerMonitor;
 
   beforeEach(() => {
     now = new Date(at.getTime() + 1000);
@@ -46,6 +48,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     resolvedElsewhere = false;
     returnedTerminal = false;
     moves = retries = gauge = 0;
+    wagerMonitor = new RecordingWagerMonitor();
     outcomes = [];
     errors = [];
     trace = [];
@@ -147,6 +150,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
       settlement,
       clock,
       monitor,
+      wagerMonitor,
     );
   });
 
@@ -235,6 +239,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     expect(outcomes).toEqual(['failed']);
     expect(errors).toEqual([processingError]);
     expect(retries).toBe(0);
+    expect(wagerMonitor.recordings.map((r) => r.status)).toEqual(['FAILED']);
   });
 
   it('falha transitória mantém a pendência e agenda retry', async () => {
@@ -246,6 +251,7 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     expect(transaction.referenceAttempts).toBe(1);
     expect(outcomes).toHaveLength(0);
     expect(retries).toBe(1);
+    expect(wagerMonitor.recordings).toEqual([]);
   });
 
   it('referência existente pode ser processada depois do TTL', async () => {
@@ -254,6 +260,9 @@ describe('ResolvePendingWagerTransactionsUseCase', () => {
     await resolver.execute({ limit: 10 });
     expect(transaction.status).toBe('PROCESSED');
     expect(outcomes).toEqual(['processed']);
+    expect(wagerMonitor.recordings).toEqual([
+      { status: 'PROCESSED', transactionId: transaction.id },
+    ]);
   });
 
   it('corrida em que outro worker resolveu antes do lock sai sem efeito', async () => {

@@ -9,6 +9,7 @@ import { LedgerRepository } from '../../wallet/repository/ledger.repository';
 import { WalletMovementRepository } from '../../wallet/repository/wallet-movement.repository';
 import { WalletRepository } from '../../wallet/repository/wallet.repository';
 import type { PendingReferenceMonitor } from '../gateway/pending-reference-monitor.gateway';
+import type { WagerTransactionMonitor } from '../gateway/wager-transaction-monitor.gateway';
 import { WagerTransactionRepository } from '../repository/wager-transaction.repository';
 import { FindWagerTransactionByExternalIdUseCase } from '../usecase/find-by-external-id/find-by-external-id.usecase';
 import { FindWagerTransactionByIdUseCase } from '../usecase/find-by-id/find-by-id.usecase';
@@ -22,6 +23,7 @@ export interface WageringFactoryDependencies {
   ids: IdGenerator;
   clock: Clock;
   pendingMonitor: PendingReferenceMonitor;
+  wagerMonitor: WagerTransactionMonitor;
   pendingReferenceTtlSeconds: number;
 }
 
@@ -70,6 +72,7 @@ export const WageringFactory = {
         dependencies.ids,
         dependencies.clock,
         settlement,
+        dependencies.wagerMonitor,
       );
     return {
       resolvePending: new ResolvePendingWagerTransactionsUseCase(
@@ -79,6 +82,7 @@ export const WageringFactory = {
         settlement,
         dependencies.clock,
         dependencies.pendingMonitor,
+        dependencies.wagerMonitor,
       ),
       submit: submitWith(dependencies.transactions),
       submitFor: (delivery) => submitWith(inboxFor(delivery)),
@@ -89,6 +93,7 @@ export const WageringFactory = {
           wallets,
           dependencies.ids,
           dependencies.clock,
+          dependencies.wagerMonitor,
         ),
       findById: new FindWagerTransactionByIdUseCase(
         dependencies.transactions,
