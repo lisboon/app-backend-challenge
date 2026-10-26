@@ -19,6 +19,7 @@ import {
 
 const ONE_TRANSACTION_PER_IDEMPOTENCY_KEY = 'wager_tx_idempotency_uk';
 const ONE_TRANSACTION_PER_EXTERNAL_ID = 'wager_tx_external_uk';
+const ONE_REVERSAL_PER_KIND = 'wager_tx_single_reversal_uk';
 
 export class WagerTransactionRepository implements WagerTransactionGateway {
   async create(
@@ -31,7 +32,7 @@ export class WagerTransactionRepository implements WagerTransactionGateway {
         WagerTransactionModelMapper.toModel(transaction),
       );
     } catch (error) {
-      if (isUniqueViolation(error, 'wager_tx_single_reversal_uk')) {
+      if (isUniqueViolation(error, ONE_REVERSAL_PER_KIND)) {
         throw new ReferenceAlreadyReversedError();
       }
       if (isUniqueViolation(error, ONE_TRANSACTION_PER_IDEMPOTENCY_KEY)) {
@@ -55,7 +56,7 @@ export class WagerTransactionRepository implements WagerTransactionGateway {
         WagerTransactionModelMapper.toModel(transaction),
       );
     } catch (error) {
-      if (isUniqueViolation(error, 'wager_tx_single_reversal_uk')) {
+      if (isUniqueViolation(error, ONE_REVERSAL_PER_KIND)) {
         throw new ReferenceAlreadyReversedError();
       }
       throw error;
@@ -77,11 +78,14 @@ export class WagerTransactionRepository implements WagerTransactionGateway {
     id: string,
     trx: TransactionContext,
   ): Promise<WagerTransaction | null> {
-    const rows = await entityManagerOf(trx).execute<{ id: string }[]>(
-      "select id from wager_transactions where id=? and status='PENDING_REFERENCE' for update skip locked",
+    const em = entityManagerOf(trx);
+    const [row] = await em.execute(
+      "select * from wager_transactions where id=? and status='PENDING_REFERENCE' for update skip locked",
       [id],
     );
-    return rows.length === 0 ? null : this.findById(id, trx);
+    return row
+      ? WagerTransactionModelMapper.toEntity(em.map(WagerTransactionModel, row))
+      : null;
   }
 
   async findReversals(
@@ -89,17 +93,13 @@ export class WagerTransactionRepository implements WagerTransactionGateway {
     trx: TransactionContext,
   ): Promise<WagerTransaction[]> {
     const em = entityManagerOf(trx);
-    const rows = await em.execute<{ id: string }[]>(
-      "select id from wager_transactions where status='PROCESSED' and (reference_transaction_id=? or reference_transaction_id in (select id from wager_transactions where reference_transaction_id=? and kind='REFUND' and status='PROCESSED'))",
+    const rows = await em.execute(
+      "select * from wager_transactions where status='PROCESSED' and (reference_transaction_id=? or reference_transaction_id in (select id from wager_transactions where reference_transaction_id=? and kind='REFUND' and status='PROCESSED'))",
       [referenceId, referenceId],
     );
-    if (rows.length === 0) {
-      return [];
-    }
-    const models = await em.find(WagerTransactionModel, {
-      id: { $in: rows.map((row) => row.id) },
-    });
-    return models.map((model) => WagerTransactionModelMapper.toEntity(model));
+    return rows.map((row) =>
+      WagerTransactionModelMapper.toEntity(em.map(WagerTransactionModel, row)),
+    );
   }
 
   async accelerateReferences(
