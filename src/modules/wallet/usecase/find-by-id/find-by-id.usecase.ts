@@ -17,7 +17,7 @@ export class FindWalletByIdUseCase implements FindWalletByIdUseCaseInterface {
   async execute(
     input: FindWalletByIdUseCaseInputDto,
   ): Promise<FindWalletByIdUseCaseOutputDto> {
-    const wallet = await this.transactions.execute((trx) =>
+    const wallet = await this.transactions.snapshot((trx) =>
       this.wallets.findById(input.id, trx),
     );
     if (!wallet) {

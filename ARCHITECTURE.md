@@ -546,7 +546,10 @@ O extrato usa paginação por chave sobre `wallet_version`, em ordem decrescente
 apoiada pelo índice único `(wallet_id, wallet_version)`. A próxima página busca
 versões estritamente menores que a última devolvida. Consultar `limit + 1`
 permite informar o fim sem contar todos os lançamentos. Novos lançamentos não
-deslocam as páginas já percorridas, como aconteceria com `OFFSET`.
+deslocam as páginas já percorridas, como aconteceria com `OFFSET`. O extrato lê
+a wallet e a página no mesmo `snapshot` de leitura, assim como as consultas de
+wallet e de transação por id e por id externo: só leitura, sem segurar uma
+transação de escrita.
 
 O cursor pertence ao transporte HTTP: base64url de
 `{"v":1,"walletVersion":<n>}`. O caso de uso recebe apenas a versão. A leitura
