@@ -10,7 +10,7 @@ import { MIGRATIONS } from './migrations';
 
 const CONNECTION_TIMEOUT_MS = 1000;
 
-export function ormConfig(clientUrl: string): Options {
+export function ormConfig(clientUrl: string, poolMax: number): Options {
   return defineConfig({
     clientUrl,
     entities: [
@@ -22,6 +22,7 @@ export function ormConfig(clientUrl: string): Options {
     ],
     extensions: [Migrator],
     allowGlobalContext: false,
+    pool: { max: poolMax },
     driverOptions: { connectionTimeoutMillis: CONNECTION_TIMEOUT_MS },
     migrations: {
       tableName: 'schema_migrations',

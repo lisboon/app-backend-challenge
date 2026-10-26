@@ -1,7 +1,10 @@
 import { INestApplication, ModuleMetadata } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
-import type { AppConfig } from '../../src/infra/config/app-config';
+import {
+  type AppConfig,
+  DEFAULT_DATABASE_POOL_MAX,
+} from '../../src/infra/config/app-config';
 import { APP_CONFIG } from '../../src/infra/config/config.module';
 import { AppModule } from '../../src/infra/http/app.module';
 
@@ -44,6 +47,7 @@ export function testAppConfig(overrides: Partial<TestInfra> = {}): AppConfig {
     consumerRetryBaseSeconds: 1,
     consumerConcurrency: 10,
     databaseUrl: infra.databaseUrl,
+    databasePoolMax: DEFAULT_DATABASE_POOL_MAX,
     sqs: {
       region: 'us-east-1',
       endpoint: infra.sqsEndpoint,

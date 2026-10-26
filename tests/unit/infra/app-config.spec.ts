@@ -67,9 +67,40 @@ describe('loadConfig', () => {
     ['CONSUMER_RETRY_BASE_SECONDS', '0', 'entre 1 e 300'],
     ['CONSUMER_CONCURRENCY', '101', 'entre 1 e 100'],
     ['CONSUMER_CONCURRENCY', 'abc', 'entre 1 e 100'],
+    ['DATABASE_POOL_MAX', '1', 'entre 2 e 200'],
+    ['DATABASE_POOL_MAX', '201', 'entre 2 e 200'],
+    ['DATABASE_POOL_MAX', 'abc', 'entre 2 e 200'],
   ])('recusa %s = %s', (name, value, range) => {
     expect(problemsOf({ ...valid, [name]: value })).toEqual([
       name + ' deve ser inteiro ' + range,
+    ]);
+  });
+
+  it('lê o tamanho do pool do banco', () => {
+    expect(
+      loadConfig({ ...valid, DATABASE_POOL_MAX: '40' }).databasePoolMax,
+    ).toBe(40);
+  });
+
+  it('aceita concorrência que deixa três conexões para os outros ciclos', () => {
+    expect(
+      loadConfig({
+        ...valid,
+        DATABASE_POOL_MAX: '15',
+        CONSUMER_CONCURRENCY: '12',
+      }).consumerConcurrency,
+    ).toBe(12);
+  });
+
+  it('recusa concorrência que esgotaria o pool do banco', () => {
+    expect(
+      problemsOf({
+        ...valid,
+        DATABASE_POOL_MAX: '15',
+        CONSUMER_CONCURRENCY: '13',
+      }),
+    ).toEqual([
+      'CONSUMER_CONCURRENCY deve deixar 3 conexões de DATABASE_POOL_MAX para outbox, pendências e readiness',
     ]);
   });
 
@@ -89,6 +120,7 @@ describe('loadConfig', () => {
       consumerRetryBaseSeconds: 2,
       consumerConcurrency: 10,
       databaseUrl: valid.DATABASE_URL,
+      databasePoolMax: 15,
       sqs: {
         region: 'us-east-1',
         endpoint: 'http://sqs:4566',

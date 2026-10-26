@@ -16,7 +16,7 @@ export const TRANSACTION_MANAGER = Symbol('TRANSACTION_MANAGER');
       provide: MikroORM,
       inject: [APP_CONFIG],
       useFactory: (config: AppConfig): Promise<MikroORM> =>
-        MikroORM.init(ormConfig(config.databaseUrl)),
+        MikroORM.init(ormConfig(config.databaseUrl, config.databasePoolMax)),
     },
     {
       provide: TRANSACTION_MANAGER,
