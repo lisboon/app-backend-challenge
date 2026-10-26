@@ -2,11 +2,15 @@ import { z } from 'zod';
 
 import { uuid } from './uuid.contract';
 
-export const providerId = z.string().min(1).max(64);
+const storableText = z
+  .string()
+  .regex(/^[^\0]*$/, 'texto não pode conter o caractere NUL');
 
-export const identifier = z.string().min(1).max(128);
+export const providerId = storableText.min(1).max(64);
 
-export const idempotencyKey = z.string().max(255);
+export const identifier = storableText.min(1).max(128);
+
+export const idempotencyKey = storableText.max(255);
 
 export const submitWagerTransactionContract = z.strictObject({
   providerId,
@@ -24,7 +28,7 @@ export const submitWagerTransactionContract = z.strictObject({
 });
 
 export const wagerTransactionMessageContract = z.strictObject({
-  messageId: z.string().min(1).max(128),
+  messageId: identifier,
   type: z.literal('WagerTransactionRequested'),
   occurredAt: z.iso.datetime({ offset: true }),
   data: submitWagerTransactionContract.extend({

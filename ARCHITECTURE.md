@@ -602,7 +602,10 @@ saldo atual, porque responde ao pedido original.
 - **Limites de tamanho são de contrato.** `providerId` até 64 caracteres,
   `externalTransactionId`, `roundId` e `gameId` até 128, `Idempotency-Key` até
   255, com espaços nas pontas removidos. As colunas são `text`; o limite
-  protege índices e logs, e quem passa dele recebe `400`.
+  protege índices e logs, e quem passa dele recebe `400`. O mesmo contrato
+  recusa o caractere NUL, que o `text` do PostgreSQL não grava: antes ele
+  chegava ao banco e virava 500. Na fila, a mensagem vai para a DLQ com
+  `MESSAGE_INVALID`.
 
 O consumo da fila `wager-transactions.fifo` usa este mesmo caso de uso, com
 a inbox na mesma transação (seção 11).

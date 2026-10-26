@@ -74,4 +74,24 @@ describe('contrato da mensagem WagerTransactionRequested', () => {
   ])('recusa %s', (_caso, value) => {
     expect(accepts(value)).toBe(false);
   });
+
+  it.each([
+    'providerId',
+    'externalTransactionId',
+    'idempotencyKey',
+    'roundId',
+    'gameId',
+    'referenceExternalTransactionId',
+  ])('recusa o caractere NUL em %s, que o PostgreSQL não grava', (field) => {
+    expect(
+      accepts({
+        ...message,
+        data: { ...data, kind: 'WIN', [field]: 'a\u0000b' },
+      }),
+    ).toBe(false);
+  });
+
+  it('recusa o caractere NUL no messageId', () => {
+    expect(accepts({ ...message, messageId: 'msg\u0000123' })).toBe(false);
+  });
 });

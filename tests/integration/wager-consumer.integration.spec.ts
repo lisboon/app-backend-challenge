@@ -286,6 +286,11 @@ describe('consumidor SQS com PostgreSQL e LocalStack reais', () => {
       (wallet: Wallet) => message({ ...wallet, walletId: uuid() }),
       FailureCode.WALLET_NOT_FOUND,
     ],
+    [
+      'caractere NUL que o PostgreSQL não grava',
+      (wallet: Wallet) => message(wallet, { roundId: 'round\u00001' }),
+      FailureCode.MESSAGE_INVALID,
+    ],
   ] as const)(
     'mensagem permanente vai direto para a DLQ: %s',
     async (_caso, build, failureCode) => {
