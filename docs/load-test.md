@@ -112,7 +112,7 @@ Comparação entre versões:
 | Wallets distribuídas fazem de 232 a 347 op/s | cenário 3 | wallets diferentes não compartilham lock | onde fica o gargalo: CPU, pool ou LocalStack |
 | A fila faz cerca de um terço da HTTP | cenário 5 | uma mensagem por `ReceiveMessage` e o `DeleteMessage`: duas idas ao SQS por mensagem ([arquitetura](../ARCHITECTURE.md#fila-10)) | o mesmo no SQS real |
 | O lag da outbox caiu pela metade | comparação entre versões | com o intervalo fixo, cada worker entregava no máximo 100 eventos a cada 500 ms, abaixo dos mais de 500 eventos/s que as apostas produzem | |
-| A hot wallet perdeu vazão na versão atual | comparação entre versões | o publicador trava só linhas da outbox e a aposta só insere linhas novas, então não é disputa de lock; a consulta do lote calcula funções de janela sobre todos os pendentes e, rodando sem pausa, ocupa CPU do PostgreSQL, e a hot wallet, serial, sente primeiro | a medição direta da CPU do PostgreSQL durante a hot wallet |
+| A hot wallet perdeu vazão na versão atual | comparação entre versões | o publicador trava só linhas da outbox e a aposta só insere linhas novas, então não é disputa de lock. Hipótese: a consulta do lote calcula funções de janela sobre todos os pendentes e, rodando sem pausa, ocupa CPU do PostgreSQL, e a hot wallet, serial, sente primeiro | a medição direta da CPU do PostgreSQL durante a hot wallet |
 | Uma rodada saiu com p50 de 58 ms e p95 de 1,97 s na hot wallet | rodada 3 | distribuição bimodal: as requisições que pegaram conexão passaram rápido, e as outras esperaram o timeout | |
 
 A variação entre rodadas é grande porque tudo divide a mesma máquina, mas a
