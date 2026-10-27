@@ -172,6 +172,16 @@ referência (mesma wallet, player, moeda e rodada); estado da referência;
 reversão já aplicada; valor diferente; saldo e limite. Reversão sem saldo é
 `REVERSAL_INSUFFICIENT_BALANCE`, distinta do `INSUFFICIENT_BALANCE` da aposta.
 
+**Estados.** A tabela de transições é fechada, no domínio e num trigger do
+schema. Qualquer outra transição é erro de programação e responde 500, sem
+código de negócio.
+
+| Estado | Pode ir para |
+|---|---|
+| `PENDING` | `PROCESSED`, `REJECTED`, `PENDING_REFERENCE`, `FAILED` |
+| `PENDING_REFERENCE` | `PROCESSED`, `REJECTED`, `FAILED` |
+| `PROCESSED`, `REJECTED`, `FAILED` | nenhum: são terminais e imutáveis |
+
 **Referência ausente.** A transação responde 202 e fica `PENDING_REFERENCE`. Um
 ciclo do worker tenta de novo com backoff de 1 s × 2^(tentativas − 1), até 5
 minutos, sem passar do prazo. A chegada da referência antecipa as pendentes que
@@ -246,6 +256,13 @@ Gravo também as rejeições de negócio, com o saldo observado. Assim o reenvio
 uma aposta rejeitada devolve a mesma rejeição, e não uma nova avaliação contra o
 saldo de agora; e o reenvio de uma aplicada devolve o saldo daquele momento.
 
+**Reconciliação.** `POST /wallets/:id/reconciliation` lê o saldo e soma o
+ledger no mesmo snapshot (`REPEATABLE READ`, só leitura), então um débito
+confirmado entre as duas leituras não gera divergência falsa. A soma é feita
+numa única agregação `NUMERIC` e só o resultado é convertido, porque somar
+créditos e débitos em separado estoura a faixa numa wallet perto do teto. A
+divergência é relatada, registrada em log e métrica, e nunca corrigida.
+
 ## Fila (§10)
 
 **Pedido:** o mesmo caso de uso da HTTP, inbox persistente, ack depois do
@@ -299,6 +316,17 @@ A entrega é at-least-once: se o SQS recebe e o commit do lote falha, o evento
 vai de novo, com o mesmo `eventId`. Quem consome deduplica por `eventId`. Não há
 limite de tentativas, porque um evento financeiro confirmado não pode ser
 abandonado; o atraso aparece em `outbox_lag_seconds`.
+
+| Evento | Quando |
+|---|---|
+| `WagerTransactionProcessed` | transação aplicada, inclusive `LOSS` e a abertura de wallet |
+| `WagerTransactionRejected` | rejeição de negócio, inclusive a expiração de referência |
+| `WagerTransactionPendingReference` | aceite pendente |
+| `WalletBalanceChanged` | saldo alterado; o `causationId` é o `eventId` do processado da mesma transação |
+
+Todos são subclasses de `IntegrationEvent<T>`, com o tipo e a versão (1) no
+próprio tipo, `MoneyProps` em string nos dados e o `correlationId` da requisição
+original. Um reenvio não gera evento novo.
 
 Quando um lote vem cheio (100 eventos), busco o próximo na hora. Com o
 intervalo fixo de 500 ms, cada worker entregava no máximo 100 eventos por
