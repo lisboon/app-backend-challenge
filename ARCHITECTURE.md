@@ -115,7 +115,8 @@ tenta violá-lo por SQL cru (`tests/integration/schema.integration.spec.ts`):
 | Lançamento fecha a conta | `CHECK` de `balance_after = balance_before ± amount` conforme a direção |
 | Sem atualização perdida | `UNIQUE (wallet_id, wallet_version)` no ledger |
 | Saldo acompanha o ledger | trigger diferido no commit: saldo e versão da wallet batem com o último lançamento |
-| Ledger e outbox imutáveis | triggers que recusam `UPDATE`, `DELETE` e `TRUNCATE` |
+| Ledger imutável | triggers que recusam `UPDATE`, `DELETE` e `TRUNCATE` |
+| Evento da outbox imutável | triggers que recusam alterar id, agregado, tipo, payload, ocorrência e `sequence`, além de `DELETE` e `TRUNCATE`; só os metadados de publicação (tentativas, próximo retry, `published_at`) mudam |
 | Idempotência por provedor | `UNIQUE (provider_id, idempotency_key)` |
 | Um desfecho vivo por id externo | índice único parcial `(provider_id, external_transaction_id) where status <> 'FAILED'` |
 | Transação terminal imutável | trigger que recusa `UPDATE` de terminal e transições fora da tabela do domínio |
@@ -331,8 +332,9 @@ original. Um reenvio não gera evento novo.
 Quando um lote vem cheio (100 eventos), busco o próximo na hora. Com o
 intervalo fixo de 500 ms, cada worker entregava no máximo 100 eventos por
 intervalo, menos do que a carga produz, e o lag crescia. A troca tem custo: o
-lag caiu pela metade, mas a consulta do lote disputa CPU do PostgreSQL, e a hot
-wallet perdeu vazão no teste de carga (média de 63 contra 81 op/s). Mantive,
+lag caiu pela metade, e a hot wallet perdeu vazão no teste de carga (média de 63
+contra 81 op/s). Não é disputa de lock; minha hipótese, não medida, é que a
+consulta do lote, rodando sem pausa, disputa CPU do PostgreSQL. Mantive,
 porque lag sem limite atrasa todo consumidor, e o 503 da hot wallet é seguro de
 reenviar.
 
