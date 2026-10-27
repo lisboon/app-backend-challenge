@@ -270,12 +270,17 @@ async function queueScenario(wallets: Wallet[]): Promise<ScenarioResult> {
   const lag = watchOutboxLag();
   const startedAt = performance.now();
   for (let index = 0; index < messages.length; index += 10) {
-    await sqs.send(
+    const { Failed: failed = [] } = await sqs.send(
       new SendMessageBatchCommand({
         QueueUrl: queueUrl,
         Entries: messages.slice(index, index + 10),
       }),
     );
+    if (failed.length > 0) {
+      throw new Error(
+        `o SQS recusou ${failed.length} mensagens do lote: ${failed.map((entry) => entry.Code).join(', ')}`,
+      );
+    }
   }
   await until(
     async () => (await processed()) - processedBefore >= messages.length,
